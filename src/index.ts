@@ -56,7 +56,6 @@ export {
 // LLM Metrics
 export {
   MetricsCollector,
-  MODEL_PRICING,
   type MetricsCollectorConfig,
   type MetricsReport,
 } from './llm/metrics/index.js';

@@ -6,5 +6,4 @@ export {
   MetricsCollector,
   type MetricsCollectorConfig,
   type MetricsReport,
-  MODEL_PRICING,
 } from './metrics-collector.js';
