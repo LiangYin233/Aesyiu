@@ -1,0 +1,29 @@
+{
+  "name": "aesyiu",
+  "version": "0.1.0",
+  "description": "Core Agent framework library - extract from AesyClaw",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
+    "openai": "^6.33.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  },
+  "peerDependencies": {},
+  "files": [
+    "dist"
+  ]
+}
