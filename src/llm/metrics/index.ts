@@ -5,10 +5,6 @@
 export {
   MetricsCollector,
   type MetricsCollectorConfig,
-  type RequestMetric,
   type MetricsReport,
-  type ProviderMetrics,
-  type ModelMetrics,
-  type ModelPricing,
   MODEL_PRICING,
 } from './metrics-collector.js';
