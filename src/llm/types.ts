@@ -193,13 +193,6 @@ export interface AnthropicConvertedMessages {
   }>;
 }
 
-/**
- * 消息格式化器接口
- */
-export interface IMessageFormatter {
-  format(messages: StandardMessage[], systemPrompt?: string): unknown;
-}
-
 // ============================================================================
 // 工具转换器类型
 // ============================================================================

@@ -14,13 +14,11 @@ import {
   StreamCallbacks,
   RequestOptions,
   StandardStreamChunk,
+  ILLMProvider,
 } from './types.js';
 import { PromptContext } from './prompt-context.js';
 import { ToolDefinition } from '../tools/types.js';
-import { MessageTransformer } from './transformers/message-transformer.js';
-import { ToolTransformer } from './transformers/tool-transformer.js';
 import { MetricsCollector } from './metrics/metrics-collector.js';
-import { ILLMProvider } from './types.js';
 import { llmProviderFactory } from './factory.js';
 import { createNoOpLogger } from '../observability/logger.js';
 import type { ILogger } from '../contracts/logger.js';
@@ -37,8 +35,6 @@ export class UnifiedLLMClient {
   private readonly baseUrl?: string;
   private readonly timeout?: number;
   private readonly adapter: ILLMProvider;
-  private readonly messageTransformer: MessageTransformer;
-  private readonly toolTransformer: ToolTransformer;
   private readonly metricsCollector: MetricsCollector;
   private readonly defaultOptions: RequestOptions;
   private destroyed: boolean = false;
@@ -51,9 +47,6 @@ export class UnifiedLLMClient {
     this.baseUrl = config.baseUrl;
     this.timeout = config.timeout;
     this.logger = config.logger ?? createNoOpLogger();
-
-    this.messageTransformer = new MessageTransformer();
-    this.toolTransformer = new ToolTransformer();
 
     this.metricsCollector = new MetricsCollector();
 

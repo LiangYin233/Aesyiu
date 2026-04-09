@@ -44,7 +44,7 @@ export class OpenAICompletionAdapter implements ILLMProvider {
 
     this.logger.info(
       { provider: this.providerType, model: this.model },
-      '🤖 OpenAI Completion Adapter 已初始化'
+      'OpenAI Completion Adapter 已初始化'
     );
   }
 
@@ -62,7 +62,7 @@ export class OpenAICompletionAdapter implements ILLMProvider {
         toolCount: context.tools.length,
         contextMetadata: context.metadata,
       },
-      '📤 从 PromptContext 发送请求到 OpenAI Completion API'
+      '从 PromptContext 发送请求到 OpenAI Completion API'
     );
 
     try {

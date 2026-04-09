@@ -4,19 +4,34 @@ import {
   ILLMProvider,
   LLMProviderType,
   LLMMode,
+  StandardMessage,
   StandardResponse,
   StandardStreamChunk,
   StreamCallbacks,
   ToolCall,
   LLMProviderConfig,
+  OpenAIConvertedMessages,
+  OpenAIToolDefinition,
 } from '../types.js';
+import { ToolDefinition, ToolParameters } from '../../tools/types.js';
 import { createNoOpLogger } from '../../observability/logger.js';
 import type { ILogger } from '../../contracts/logger.js';
 import { PromptContext } from '../prompt-context.js';
 import { TokenUsageMapper } from '../utils/token-usage-mapper.js';
 import { FinishReasonMapper } from '../utils/finish-reason-mapper.js';
-import { MessageTransformer } from '../transformers/message-transformer.js';
-import { ToolTransformer } from '../transformers/tool-transformer.js';
+
+interface AssistantMessageWithToolCalls {
+  role: 'assistant';
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+}
 
 export class OpenAIChatAdapter implements ILLMProvider {
   readonly providerType = LLMProviderType.OpenAIChat;
@@ -24,8 +39,6 @@ export class OpenAIChatAdapter implements ILLMProvider {
 
   private client: OpenAI;
   private model: string;
-  private messageTransformer: MessageTransformer;
-  private toolTransformer: ToolTransformer;
   private logger: ILogger;
 
   constructor(config: LLMProviderConfig) {
@@ -42,13 +55,10 @@ export class OpenAIChatAdapter implements ILLMProvider {
 
     this.model = config.model || 'gpt-4o-mini';
     this.logger = config.logger ?? createNoOpLogger();
-    
-    this.messageTransformer = new MessageTransformer();
-    this.toolTransformer = new ToolTransformer();
 
     this.logger.info(
       { provider: this.providerType, model: this.model },
-      '🤖 OpenAI Chat Adapter 已初始化'
+      'OpenAI Chat Adapter 已初始化'
     );
   }
 
@@ -56,21 +66,95 @@ export class OpenAIChatAdapter implements ILLMProvider {
     return !!this.client.apiKey;
   }
 
+  private formatMessages(messages: StandardMessage[], systemPrompt?: string): OpenAIConvertedMessages {
+    const result: ChatCompletionMessageParam[] = [];
+
+    let systemMessage: { role: 'system'; content: string } | undefined;
+    if (systemPrompt) {
+      systemMessage = { role: 'system', content: systemPrompt };
+    }
+
+    for (const msg of messages) {
+      const converted = this.convertMessage(msg);
+      if (converted) {
+        result.push(converted);
+      }
+    }
+
+    return { systemMessage, messages: result };
+  }
+
+  private convertMessage(msg: StandardMessage): ChatCompletionMessageParam | null {
+    switch (msg.role) {
+      case 'system':
+        return { role: 'system', content: msg.content };
+      case 'user':
+        return { role: 'user', content: msg.content };
+      case 'assistant':
+        return this.convertAssistantMessage(msg);
+      case 'tool':
+        if (!msg.toolCallId) return null;
+        return { role: 'tool', content: msg.content, tool_call_id: msg.toolCallId };
+      default:
+        return null;
+    }
+  }
+
+  private convertAssistantMessage(msg: StandardMessage): ChatCompletionMessageParam {
+    const assistantMsg: ChatCompletionMessageParam = {
+      role: 'assistant',
+      content: msg.content || null,
+    };
+
+    if (msg.toolCalls && msg.toolCalls.length > 0) {
+      (assistantMsg as AssistantMessageWithToolCalls).tool_calls = msg.toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: {
+          name: tc.name,
+          arguments: JSON.stringify(tc.arguments),
+        },
+      }));
+    }
+
+    return assistantMsg;
+  }
+
+  private formatTools(tools: ToolDefinition[]): OpenAIToolDefinition[] {
+    return tools.map(tool => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: this.transformParameters(tool.parameters),
+      },
+    }));
+  }
+
+  private transformParameters(parameters: ToolParameters): ToolParameters {
+    return {
+      type: parameters.type || 'object',
+      properties: parameters.properties || {},
+      required: parameters.required,
+      additionalProperties: parameters.additionalProperties,
+    };
+  }
+
   async generate(context: PromptContext): Promise<StandardResponse> {
-    const convertedMessages = this.messageTransformer.toOpenAI(
+    const convertedMessages = this.formatMessages(
       context.messages,
       context.system.systemPrompt
     );
 
     const allMessages: ChatCompletionMessageParam[] = [];
-    
+
     if (convertedMessages.systemMessage) {
       allMessages.push(convertedMessages.systemMessage);
     }
-    
+
     allMessages.push(...convertedMessages.messages);
 
-    const openAITools = this.toolTransformer.toOpenAI(context.tools);
+    const openAITools = this.formatTools(context.tools);
 
     this.logger.debug(
       {
@@ -79,7 +163,7 @@ export class OpenAIChatAdapter implements ILLMProvider {
         toolCount: context.tools.length,
         contextMetadata: context.metadata,
       },
-      '📤 从 PromptContext 发送请求到 OpenAI Chat API'
+      '从 PromptContext 发送请求到 OpenAI Chat API'
     );
 
     try {
@@ -146,7 +230,7 @@ export class OpenAIChatAdapter implements ILLMProvider {
     context: PromptContext,
     callbacks: StreamCallbacks
   ): Promise<AsyncIterable<StandardStreamChunk>> {
-    const convertedMessages = this.messageTransformer.toOpenAI(
+    const convertedMessages = this.formatMessages(
       context.messages,
       context.system.systemPrompt
     );
@@ -159,7 +243,7 @@ export class OpenAIChatAdapter implements ILLMProvider {
 
     allMessages.push(...convertedMessages.messages);
 
-    const openAITools = this.toolTransformer.toOpenAI(context.tools);
+    const openAITools = this.formatTools(context.tools);
 
     this.logger.debug(
       {
@@ -168,7 +252,7 @@ export class OpenAIChatAdapter implements ILLMProvider {
         toolCount: context.tools.length,
         contextMetadata: context.metadata,
       },
-      '📤 从 PromptContext 发送流式请求到 OpenAI Chat API'
+      '从 PromptContext 发送流式请求到 OpenAI Chat API'
     );
 
     const toolCallsMap = new Map<number, ToolCall>();

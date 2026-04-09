@@ -1,21 +1,34 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { randomUUID } from 'crypto';
 import {
   ILLMProvider,
   LLMProviderType,
   LLMMode,
+  StandardMessage,
   StandardResponse,
   StandardStreamChunk,
   StreamCallbacks,
   ToolCall,
   LLMProviderConfig,
+  AnthropicConvertedMessages,
+  AnthropicToolDefinition,
 } from '../types.js';
+import { ToolDefinition, ToolParameters } from '../../tools/types.js';
 import { createNoOpLogger } from '../../observability/logger.js';
 import type { ILogger } from '../../contracts/logger.js';
 import { PromptContext } from '../prompt-context.js';
 import { TokenUsageMapper } from '../utils/token-usage-mapper.js';
 import { FinishReasonMapper } from '../utils/finish-reason-mapper.js';
-import { MessageTransformer } from '../transformers/message-transformer.js';
-import { ToolTransformer } from '../transformers/tool-transformer.js';
+
+type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string };
+
+interface AnthropicMessage {
+  role: 'user' | 'assistant';
+  content: string | AnthropicContentBlock[];
+}
 
 export class AnthropicAdapter implements ILLMProvider {
   readonly providerType = LLMProviderType.Anthropic;
@@ -23,8 +36,6 @@ export class AnthropicAdapter implements ILLMProvider {
 
   private client: Anthropic;
   private model: string;
-  private messageTransformer: MessageTransformer;
-  private toolTransformer: ToolTransformer;
   private logger: ILogger;
 
   constructor(config: LLMProviderConfig) {
@@ -41,13 +52,10 @@ export class AnthropicAdapter implements ILLMProvider {
 
     this.model = config.model || 'claude-sonnet-4-20250514';
     this.logger = config.logger ?? createNoOpLogger();
-    
-    this.messageTransformer = new MessageTransformer();
-    this.toolTransformer = new ToolTransformer();
 
     this.logger.info(
       { provider: this.providerType, model: this.model },
-      '🤖 Anthropic Claude Adapter 已初始化'
+      'Anthropic Claude Adapter 已初始化'
     );
   }
 
@@ -55,13 +63,105 @@ export class AnthropicAdapter implements ILLMProvider {
     return !!this.client.apiKey;
   }
 
+  private formatMessages(messages: StandardMessage[], systemPrompt?: string): AnthropicConvertedMessages {
+    const result: AnthropicMessage[] = [];
+    let currentUserContent: AnthropicContentBlock[] = [];
+
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        continue;
+      }
+
+      if (msg.role === 'assistant' && currentUserContent.length > 0) {
+        result.push({ role: 'user', content: currentUserContent });
+        currentUserContent = [];
+      }
+
+      const converted = this.convertMessage(msg, currentUserContent);
+
+      if (converted) {
+        result.push(converted.message);
+        currentUserContent = converted.newCurrentContent;
+      }
+    }
+
+    if (currentUserContent.length > 0) {
+      result.push({ role: 'user', content: currentUserContent });
+    }
+
+    return { systemPrompt, messages: result };
+  }
+
+  private convertMessage(
+    msg: StandardMessage,
+    currentUserContent: AnthropicContentBlock[]
+  ): { message: AnthropicMessage; newCurrentContent: AnthropicContentBlock[] } | null {
+    switch (msg.role) {
+      case 'user':
+        currentUserContent.push({ type: 'text', text: msg.content });
+        return null;
+
+      case 'assistant': {
+        const assistantContent: AnthropicContentBlock[] = [];
+
+        if (msg.content) {
+          assistantContent.push({ type: 'text', text: msg.content });
+        }
+
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          for (const tc of msg.toolCalls) {
+            assistantContent.push({
+              type: 'tool_use',
+              id: tc.id,
+              name: tc.name,
+              input: tc.arguments,
+            });
+          }
+        }
+
+        return {
+          message: { role: 'assistant', content: assistantContent },
+          newCurrentContent: [],
+        };
+      }
+
+      case 'tool':
+        currentUserContent.push({
+          type: 'tool_result',
+          tool_use_id: msg.toolCallId || `tool_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+          content: msg.content,
+        });
+        return null;
+
+      default:
+        return null;
+    }
+  }
+
+  private formatTools(tools: ToolDefinition[]): AnthropicToolDefinition[] {
+    return tools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: this.transformParameters(tool.parameters),
+    }));
+  }
+
+  private transformParameters(parameters: ToolParameters): ToolParameters {
+    return {
+      type: parameters.type || 'object',
+      properties: parameters.properties || {},
+      required: parameters.required,
+      additionalProperties: parameters.additionalProperties,
+    };
+  }
+
   async generate(context: PromptContext): Promise<StandardResponse> {
-    const convertedMessages = this.messageTransformer.toAnthropic(
+    const convertedMessages = this.formatMessages(
       context.messages,
       context.system.systemPrompt
     );
 
-    const anthropicTools = this.toolTransformer.toAnthropic(context.tools);
+    const anthropicTools = this.formatTools(context.tools);
 
     this.logger.debug(
       {
@@ -70,7 +170,7 @@ export class AnthropicAdapter implements ILLMProvider {
         toolCount: context.tools.length,
         contextMetadata: context.metadata,
       },
-      '📤 从 PromptContext 发送请求到 Anthropic Claude API'
+      '从 PromptContext 发送请求到 Anthropic Claude API'
     );
 
     try {
@@ -129,12 +229,12 @@ export class AnthropicAdapter implements ILLMProvider {
     context: PromptContext,
     callbacks: StreamCallbacks
   ): Promise<AsyncIterable<StandardStreamChunk>> {
-    const convertedMessages = this.messageTransformer.toAnthropic(
+    const convertedMessages = this.formatMessages(
       context.messages,
       context.system.systemPrompt
     );
 
-    const anthropicTools = this.toolTransformer.toAnthropic(context.tools);
+    const anthropicTools = this.formatTools(context.tools);
 
     this.logger.debug(
       {
@@ -143,7 +243,7 @@ export class AnthropicAdapter implements ILLMProvider {
         toolCount: context.tools.length,
         contextMetadata: context.metadata,
       },
-      '📤 从 PromptContext 发送流式请求到 Anthropic Claude API'
+      '从 PromptContext 发送流式请求到 Anthropic Claude API'
     );
 
     const toolCallsMap = new Map<number, ToolCall>();

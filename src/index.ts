@@ -34,25 +34,6 @@ export { OpenAIChatAdapter } from './llm/adapters/openai-chat-adapter.js';
 export { OpenAICompletionAdapter } from './llm/adapters/openai-completion-adapter.js';
 export { AnthropicAdapter } from './llm/adapters/anthropic-adapter.js';
 
-// LLM Transformers
-export { MessageTransformer, OpenAIMessageFormatter, AnthropicMessageFormatter } from './llm/transformers/message-transformer.js';
-export { ToolTransformer, OpenAIToolFormatter, AnthropicToolFormatter } from './llm/transformers/tool-transformer.js';
-
-// LLM Stream
-export {
-  StreamHandler,
-  createOpenAIStreamHandler,
-  createAnthropicStreamHandler,
-  handleStream,
-  handleOpenAIStream,
-  handleAnthropicStream,
-  type StreamChunk,
-  type OpenAIStreamChunk,
-  type AnthropicStreamChunk,
-  type StreamHandlerOptions,
-  type StreamOutput,
-} from './llm/stream/index.js';
-
 // LLM Metrics
 export {
   MetricsCollector,
