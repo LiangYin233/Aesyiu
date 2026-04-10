@@ -1,11 +1,9 @@
 import { randomUUID } from 'crypto';
 import { IUnifiedMessage, IChannelContext, IOutboundMessage, IOutboundPayload, MiddlewareFunc } from './types.js';
-import type { IPluginHookDispatcher, HookPayloadMessageReceive, HookPayloadMessageSend } from '../contracts/plugin-hook-dispatcher.js';
 import type { ILogger } from '../contracts/logger.js';
 import { createNoOpLogger } from '../observability/logger.js';
 
 export interface PipelineDeps {
-  pluginHookDispatcher?: IPluginHookDispatcher;
   logger?: ILogger;
 }
 
@@ -40,32 +38,6 @@ export class ChannelPipeline {
       `Received inbound message, dispatching to middleware chain`
     );
 
-    if (this.deps.pluginHookDispatcher) {
-      const hookResult = await this.deps.pluginHookDispatcher.dispatchMessageReceive({
-        message: {
-          channelId: message.channelId,
-          chatId: message.chatId,
-          text: message.text,
-          timestamp: message.timestamp,
-          metadata: message.metadata,
-        },
-      });
-
-      if (!hookResult) {
-        this.logger.info(
-          { traceId, chatId: message.chatId },
-          'Message blocked by plugin, skipping further processing'
-        );
-        return {
-          traceId,
-          inbound: message,
-          outbound: { text: '', mediaFiles: [] },
-          createdAt: Date.now(),
-          blocked: true,
-        } as IChannelContext & { blocked?: boolean };
-      }
-    }
-
     const ctx: IChannelContext = {
       traceId,
       inbound: message,
@@ -99,23 +71,6 @@ export class ChannelPipeline {
 
     try {
       await next();
-
-      if (this.deps.pluginHookDispatcher) {
-        const processedOutbound = await this.deps.pluginHookDispatcher.dispatchMessageSend({
-          message: {
-            chatId: ctx.inbound.chatId,
-            text: ctx.outbound?.text,
-            mediaFiles: ctx.outbound?.mediaFiles,
-            error: ctx.outbound?.error,
-          },
-        });
-
-        if (processedOutbound) {
-          ctx.outbound.text = processedOutbound.text;
-          ctx.outbound.mediaFiles = processedOutbound.mediaFiles;
-          ctx.outbound.error = processedOutbound.error;
-        }
-      }
 
       if (sendFn && ctx.outbound?.text) {
         await sendFn({

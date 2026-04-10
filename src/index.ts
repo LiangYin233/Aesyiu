@@ -69,10 +69,8 @@ export { createNoOpLogger } from './observability/logger.js';
 export type { ILogger } from './contracts/logger.js';
 
 // Contracts (Interfaces)
-export type { IRoleManager, RoleConfig } from './contracts/role-manager.js';
 export type { ISkillManager, SkillMetadata, SkillRoute } from './contracts/skill-manager.js';
 export type { ISystemPromptBuilder, PromptBuildContext } from './contracts/system-prompt-builder.js';
-export type { IPluginHookDispatcher, HookPayloadMessageReceive, HookPayloadBeforeLLMRequest, HookPayloadToolCall, HookPayloadAfterToolCall, HookPayloadMessageSend } from './contracts/plugin-hook-dispatcher.js';
 
 // Utils
 export { mapProviderType } from './utils/llm-utils.js';

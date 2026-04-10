@@ -15,8 +15,6 @@ import {
   ToolCallRequest,
 } from '../tools/types.js';
 import type { ILogger } from '../contracts/logger.js';
-import type { IRoleManager } from '../contracts/role-manager.js';
-import type { IPluginHookDispatcher } from '../contracts/plugin-hook-dispatcher.js';
 import {
   SessionMemoryManager,
   MemoryConfig,
@@ -26,8 +24,6 @@ import { createNoOpLogger } from '../observability/logger.js';
 
 export interface AgentDeps {
   logger?: ILogger;
-  roleManager?: IRoleManager;
-  pluginHookDispatcher?: IPluginHookDispatcher;
   systemPromptBuilder?: ISystemPromptBuilder;
 }
 
@@ -90,7 +86,6 @@ export class AgentEngine {
 
     const memoryDeps: SessionMemoryManagerDependencies = {
       systemPromptBuilder: deps.systemPromptBuilder ?? new FallbackSystemPromptBuilder(),
-      roleManager: deps.roleManager,
       logger: this.logger,
     };
 
@@ -131,9 +126,8 @@ export class AgentEngine {
           chatId: this.chatId,
           totalTools: this.toolRegistry.getAllToolDefinitions().length,
           filteredTools: filteredTools.length,
-          roleId: this.memory.getActiveRoleId(),
         },
-        'UnifiedLLMClient created with role-filtered tools'
+        'UnifiedLLMClient created with tools'
       );
     }
     return this.client;
@@ -194,13 +188,6 @@ export class AgentEngine {
         const filteredTools = this.getFilteredTools();
         const currentMessages = this.memory.getMessages();
 
-        if (this.deps.pluginHookDispatcher) {
-          await this.deps.pluginHookDispatcher.dispatchBeforeLLMRequest({
-            messages: currentMessages,
-            tools: filteredTools,
-          });
-        }
-
         const response = await client.generate({
           messages: [...currentMessages],
           systemPrompt: this.config.systemPrompt,
@@ -210,7 +197,6 @@ export class AgentEngine {
           userId: 'user',
           metadata: {
             traceId: this.instanceId,
-            roleId: this.memory.getActiveRoleId(),
           },
         });
 
@@ -246,51 +232,12 @@ export class AgentEngine {
           }));
 
           for (const toolRequest of toolRequests) {
-            const roleId = this.memory.getActiveRoleId();
-            if (this.deps.roleManager && !this.deps.roleManager.isToolAllowed(roleId, toolRequest.name)) {
-              this.logger.warn(
-                { toolName: toolRequest.name, roleId },
-                'Tool blocked by role permission'
-              );
-
-              const toolMessage = MessageFactory.createToolMessage(
-                toolRequest.id,
-                toolRequest.name,
-                `[Permission denied] Role "${roleId}" is not allowed to use tool "${toolRequest.name}".`
-              );
-              await this.memory.addMessage(toolMessage);
-              continue;
-            }
-
-            let toolResult: { success: boolean; content: string; error?: string } | null = null;
-
-            if (this.deps.pluginHookDispatcher) {
-              toolResult = await this.deps.pluginHookDispatcher.dispatchBeforeToolCall({
-                id: toolRequest.id,
-                name: toolRequest.name,
-                arguments: toolRequest.arguments,
-              });
-            }
-
-            if (!toolResult) {
-              const results = await this.toolRegistry.executeTools([toolRequest], context);
-              toolResult = {
-                success: results[0].success,
-                content: results[0].content,
-                error: results[0].error,
-              };
-            }
-
-            if (this.deps.pluginHookDispatcher) {
-              toolResult = await this.deps.pluginHookDispatcher.dispatchAfterToolCall({
-                toolCall: {
-                  id: toolRequest.id,
-                  name: toolRequest.name,
-                  arguments: toolRequest.arguments,
-                },
-                result: toolResult,
-              });
-            }
+            const results = await this.toolRegistry.executeTools([toolRequest], context);
+            const toolResult = {
+              success: results[0].success,
+              content: results[0].content,
+              error: results[0].error,
+            };
 
             const toolMessage = MessageFactory.createToolMessage(
               toolRequest.id,
@@ -356,16 +303,7 @@ export class AgentEngine {
   }
 
   private getFilteredTools(): ToolDefinition[] {
-    const roleId = this.memory.getActiveRoleId();
-    const allToolDefs = this.toolRegistry.getAllToolDefinitions();
-
-    if (!this.deps.roleManager) {
-      return allToolDefs;
-    }
-
-    const toolNames = allToolDefs.map(t => t.name);
-    const allowedToolNames = this.deps.roleManager.getAllowedTools(roleId, toolNames);
-    return allToolDefs.filter(tool => allowedToolNames.includes(tool.name));
+    return this.toolRegistry.getAllToolDefinitions();
   }
 
   updateModel(model: string): void {
@@ -389,7 +327,7 @@ export class AgentEngine {
 import type { SessionMemoryManagerDependencies } from '../memory/session-memory-manager.js';
 
 class FallbackSystemPromptBuilder implements ISystemPromptBuilder {
-  buildSystemPrompt(params: { roleId: string; chatId: string; toolDescriptions?: string; skillInstructions?: string; sessionMemory?: string }): string {
+  buildSystemPrompt(params: { roleId?: string; chatId: string; toolDescriptions?: string; skillInstructions?: string; sessionMemory?: string }): string {
     return 'You are a helpful AI assistant.';
   }
 }

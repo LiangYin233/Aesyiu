@@ -6,5 +6,5 @@ export interface PromptBuildContext {
 }
 
 export interface ISystemPromptBuilder {
-  buildSystemPrompt(params: { roleId: string; chatId: string; toolDescriptions?: string; skillInstructions?: string; sessionMemory?: string }): string;
+  buildSystemPrompt(params: { roleId?: string; chatId: string; toolDescriptions?: string; skillInstructions?: string; sessionMemory?: string }): string;
 }

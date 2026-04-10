@@ -8,8 +8,6 @@ import { LLMProviderType } from './llm/types.js';
 import type { ILogger } from './contracts/logger.js';
 import { createNoOpLogger } from './observability/logger.js';
 import { mapProviderType } from './utils/llm-utils.js';
-import type { IRoleManager } from './contracts/role-manager.js';
-import type { IPluginHookDispatcher } from './contracts/plugin-hook-dispatcher.js';
 import type { ISystemPromptBuilder } from './contracts/system-prompt-builder.js';
 import type { MemoryConfig } from './memory/types.js';
 
@@ -69,18 +67,6 @@ export class Agent {
 
   setMemoryConfig(memoryConfig: Partial<MemoryConfig>): Agent {
     this.config.memoryConfig = memoryConfig;
-    return this;
-  }
-
-  setRoleManager(roleManager: IRoleManager): Agent {
-    this.deps.roleManager = roleManager;
-    return this;
-  }
-
-  setPluginHookDispatcher(dispatcher: IPluginHookDispatcher): Agent {
-    this.deps.pluginHookDispatcher = dispatcher;
-    this.pipelineDeps.pluginHookDispatcher = dispatcher;
-    this.pipeline = new ChannelPipeline(this.pipelineDeps);
     return this;
   }
 
@@ -197,16 +183,6 @@ export class AgentBuilder {
     return this;
   }
 
-  setRoleManager(roleManager: IRoleManager): AgentBuilder {
-    this.agent.setRoleManager(roleManager);
-    return this;
-  }
-
-  setPluginHookDispatcher(dispatcher: IPluginHookDispatcher): AgentBuilder {
-    this.agent.setPluginHookDispatcher(dispatcher);
-    return this;
-  }
-
   setSystemPromptBuilder(builder: ISystemPromptBuilder): AgentBuilder {
     this.agent.setSystemPromptBuilder(builder);
     return this;
@@ -244,8 +220,6 @@ export function createAgent(config?: {
   maxSteps?: number;
   memoryConfig?: Partial<MemoryConfig>;
   logger?: ILogger;
-  roleManager?: IRoleManager;
-  pluginHookDispatcher?: IPluginHookDispatcher;
   systemPromptBuilder?: ISystemPromptBuilder;
 }): AgentBuilder {
   const builder = new AgentBuilder();
@@ -256,8 +230,6 @@ export function createAgent(config?: {
     if (config.maxSteps) builder.setMaxSteps(config.maxSteps);
     if (config.memoryConfig) builder.setMemoryConfig(config.memoryConfig);
     if (config.logger) builder.setLogger(config.logger);
-    if (config.roleManager) builder.setRoleManager(config.roleManager);
-    if (config.pluginHookDispatcher) builder.setPluginHookDispatcher(config.pluginHookDispatcher);
     if (config.systemPromptBuilder) builder.setSystemPromptBuilder(config.systemPromptBuilder);
   }
 

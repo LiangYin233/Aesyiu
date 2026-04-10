@@ -2,7 +2,6 @@ import { createNoOpLogger } from '../observability/logger.js';
 import type { ILogger } from '../contracts/logger.js';
 import { LLMProviderType } from '../llm/types.js';
 import type { LLMConfig } from '../llm/factory.js';
-import type { IRoleManager } from '../contracts/role-manager.js';
 import type { ISystemPromptBuilder } from '../contracts/system-prompt-builder.js';
 import type { SessionOptions, SessionConfig } from './types.js';
 import { DEFAULT_SESSION_CONFIG } from './types.js';
@@ -12,10 +11,7 @@ import type { MemoryConfig as MemoryConfigInternal } from '../memory/types.js';
 import { SessionMemoryManager } from '../memory/session-memory-manager.js';
 import { AgentEngine } from '../core/agent.js';
 
-const DEFAULT_ROLE_ID = 'default';
-
 export interface SessionRegistryDependencies {
-  roleManager: IRoleManager;
   systemPromptBuilder: ISystemPromptBuilder;
   defaultLLMConfig?: LLMConfig;
   logger?: ILogger;
@@ -104,7 +100,6 @@ export class SessionRegistry {
     const llmConfig = options.llm || this.getDefaultLLMConfig();
     const maxSteps = options.maxSteps || 50;
     const systemPrompt = options.systemPrompt || this.deps.systemPromptBuilder.buildSystemPrompt({
-      roleId: DEFAULT_ROLE_ID,
       chatId: options.chatId,
     });
 
