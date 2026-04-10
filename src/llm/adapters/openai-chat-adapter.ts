@@ -172,6 +172,8 @@ export class OpenAIChatAdapter implements ILLMProvider {
         messages: allMessages,
         tools: openAITools.length > 0 ? openAITools : undefined,
         tool_choice: openAITools.length > 0 ? 'auto' : undefined,
+        ...(context.providerExtra ?? {}),
+        ...(context.modelExtraBody ?? {}),
       });
 
       const choice = response.choices[0];
@@ -266,6 +268,8 @@ export class OpenAIChatAdapter implements ILLMProvider {
         tools: openAITools.length > 0 ? openAITools : undefined,
         tool_choice: openAITools.length > 0 ? 'auto' : undefined,
         stream: true,
+        ...(context.providerExtra ?? {}),
+        ...(context.modelExtraBody ?? {}),
       });
 
       for await (const chunk of stream) {

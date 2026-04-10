@@ -1,16 +1,15 @@
-import { LLMConfig } from '../llm/factory.js';
-import { createUnifiedLLMClient } from '../llm/unified-client.js';
-import { LLMProviderType } from '../llm/types.js';
+import { type StandardMessage, MessageRole } from '../llm/types.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { MessageFactory } from './message-factory.js';
 import type { ToolExecuteContext, ITool } from '../tools/types.js';
 import type { ILogger } from '../contracts/logger.js';
 import type { ISystemPromptBuilder } from '../contracts/system-prompt-builder.js';
-import type { MemoryConfig, MemoryEvent } from '../memory/types.js';
-import { SessionMemoryManager } from '../memory/session-memory-manager.js';
-import type { SessionMemoryManagerDependencies } from '../memory/session-memory-manager.js';
-import type { MemorySnapshot } from '../memory/types.js';
+import type { MemoryConfig, MemoryEvent, MemorySnapshot } from '../memory/types.js';
+import { MemoryStateManager } from '../memory/memory-state-manager.js';
+import type { MemoryStateManagerDependencies } from '../memory/memory-state-manager.js';
 import { createNoOpLogger } from '../observability/logger.js';
+import { DynamicLLMClient } from '../llm/dynamic-client.js';
+import type { RuntimeProviderState } from '../providers/types.js';
 
 export enum TurnStopReason {
   Completed = 'completed',
@@ -30,7 +29,7 @@ export interface ToolCallRecord {
 }
 
 export interface TurnEngineConfig {
-  llmConfig: LLMConfig;
+  runtime: RuntimeProviderState;
   systemPromptBuilder?: ISystemPromptBuilder;
   logger?: ILogger;
   memoryConfig?: Partial<MemoryConfig>;
@@ -40,11 +39,14 @@ export interface TurnEngineConfig {
 }
 
 export interface TurnInput {
-  sessionKey: string;
+  stateKey?: string;
   input: string;
+  messages?: StandardMessage[];
   memorySnapshot?: MemorySnapshot;
   tools?: ITool[];
-  llmConfig?: LLMConfig;
+  providerState?: RuntimeProviderState;
+  maxSteps?: number;
+  memoryConfig?: Partial<MemoryConfig>;
   systemContext?: {
     roleId?: string;
     systemPrompt?: string;
@@ -56,7 +58,8 @@ export interface TurnInput {
 
 export interface TurnResult {
   outputText: string;
-  nextMemorySnapshot: MemorySnapshot;
+  messages: StandardMessage[];
+  memorySnapshot: MemorySnapshot;
   toolCalls: ToolCallRecord[];
   tokenUsage: {
     promptTokens: number;
@@ -85,35 +88,51 @@ export class TurnEngine {
   }
 
   async runTurn(input: TurnInput): Promise<TurnResult> {
-    const llmConfig = input.llmConfig ?? this.config.llmConfig;
+    const stateKey = input.stateKey ?? 'default';
+    const runtime = input.providerState ?? this.config.runtime;
     const tools = input.tools ?? this.config.defaultTools ?? [];
-    const maxSteps = this.config.maxSteps ?? 15;
+    const maxSteps = input.maxSteps ?? this.config.maxSteps ?? 15;
+    const memoryConfig = input.memoryConfig ?? this.config.memoryConfig;
     const systemPrompt = input.systemContext?.systemPrompt
       ?? this.config.defaultSystemPrompt
       ?? 'You are a helpful AI assistant.';
 
     const systemPromptBuilder = this.config.systemPromptBuilder ?? new FallbackSystemPromptBuilder();
 
-    const memoryDeps: SessionMemoryManagerDependencies = {
+    const memoryDeps: MemoryStateManagerDependencies = {
       systemPromptBuilder,
       logger: this.logger,
     };
-    const memory = new SessionMemoryManager(
-      input.sessionKey,
-      this.config.memoryConfig,
+    const memory = new MemoryStateManager(
+      stateKey,
+      memoryConfig,
       memoryDeps
     );
 
+    const resolvedSystemPrompt = input.systemContext?.systemPrompt
+      ?? systemPromptBuilder.buildSystemPrompt({
+        chatId: stateKey,
+        toolDescriptions: input.systemContext?.toolDescriptions,
+        skillInstructions: input.systemContext?.skillInstructions,
+      });
+
     if (input.memorySnapshot) {
-      memory.importMemory(input.memorySnapshot);
+      memory.importMemory({
+        ...input.memorySnapshot,
+        stateKey,
+        messages: input.messages ? [...input.messages] : input.memorySnapshot.messages,
+      });
+      this.upsertSystemPrompt(memory, resolvedSystemPrompt);
+    } else if (input.messages && input.messages.length > 0) {
+      const emptySnapshot = memory.exportMemory();
+      memory.importMemory({
+        ...emptySnapshot,
+        stateKey,
+        messages: [...input.messages],
+      });
+      this.upsertSystemPrompt(memory, resolvedSystemPrompt);
     } else {
-      await memory.addMessage(MessageFactory.createSystemMessage(
-        systemPromptBuilder.buildSystemPrompt({
-          chatId: input.sessionKey,
-          toolDescriptions: input.systemContext?.toolDescriptions,
-          skillInstructions: input.systemContext?.skillInstructions,
-        })
-      ));
+      await memory.addMessage(MessageFactory.createSystemMessage(resolvedSystemPrompt));
     }
 
     const collectedEvents: MemoryEvent[] = [];
@@ -121,13 +140,7 @@ export class TurnEngine {
       collectedEvents.push(event);
     });
 
-    const client = createUnifiedLLMClient({
-      provider: llmConfig.provider as LLMProviderType,
-      model: llmConfig.model ?? 'gpt-4o-mini',
-      apiKey: llmConfig.apiKey,
-      baseUrl: llmConfig.baseUrl,
-      timeout: llmConfig.timeout,
-    });
+    const client = new DynamicLLMClient({ runtime });
 
     const toolRegistry = new ToolRegistry(this.logger);
     for (const tool of tools) {
@@ -135,9 +148,9 @@ export class TurnEngine {
     }
 
     const context: ToolExecuteContext = {
-      chatId: input.sessionKey,
+      chatId: stateKey,
       senderId: 'user',
-      traceId: `turn-${input.sessionKey}-${Date.now()}`,
+      traceId: `turn-${stateKey}-${Date.now()}`,
     };
 
     await memory.addMessage(MessageFactory.createUserMessage(input.input));
@@ -158,6 +171,9 @@ export class TurnEngine {
       while (step < maxSteps) {
         step++;
 
+        const currentModel = runtime.getCurrentModel();
+        memory.setRuntimeContextWindow(currentModel.contextWindow);
+
         const filteredTools = toolRegistry.getAllToolDefinitions();
         const currentMessages = memory.getMessages();
 
@@ -166,7 +182,7 @@ export class TurnEngine {
           systemPrompt,
           tools: filteredTools,
         }, {
-          sessionId: input.sessionKey,
+          conversationId: stateKey,
           userId: 'user',
           metadata: {
             traceId: context.traceId,
@@ -215,7 +231,7 @@ export class TurnEngine {
             const toolMessage = MessageFactory.createToolMessage(
               tc.id,
               tc.name,
-              toolResult.content
+              this.buildToolMessageContent(toolResult)
             );
             await memory.addMessage(toolMessage);
           }
@@ -245,7 +261,8 @@ export class TurnEngine {
 
     return {
       outputText: finalText,
-      nextMemorySnapshot: nextSnapshot,
+      messages: nextSnapshot.messages,
+      memorySnapshot: nextSnapshot,
       toolCalls: toolCallRecords,
       tokenUsage: totalTokenUsage,
       stopReason,
@@ -253,5 +270,39 @@ export class TurnEngine {
       steps: step,
       error,
     };
+  }
+
+  private buildToolMessageContent(result: { success: boolean; content: string; error?: string }): string {
+    if (result.success) {
+      return result.content;
+    }
+
+    if (result.error && result.content) {
+      return `Tool execution failed: ${result.error}\n\n${result.content}`;
+    }
+
+    if (result.error) {
+      return `Tool execution failed: ${result.error}`;
+    }
+
+    return result.content;
+  }
+
+  private upsertSystemPrompt(memory: MemoryStateManager, prompt: string): void {
+    const messages = memory.getMessagesCopy();
+
+    if (messages.length > 0 && messages[0].role === MessageRole.System) {
+      messages[0] = {
+        ...messages[0],
+        content: prompt,
+      };
+    } else {
+      messages.unshift(MessageFactory.createSystemMessage(prompt));
+    }
+
+    memory.importMemory({
+      ...memory.exportMemory(),
+      messages,
+    });
   }
 }

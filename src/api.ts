@@ -1,24 +1,14 @@
-import { AgentEngine, AgentConfig, AgentRunResult, AgentDeps } from './core/agent.js';
+import { AgentEngine, AgentConfig, AgentRunInput, AgentRunResult, AgentDeps } from './core/agent.js';
 import { ChannelPipeline } from './core/pipeline.js';
 import { MiddlewareFunc } from './core/types.js';
 import { ToolRegistry } from './tools/registry.js';
-import { ITool } from './tools/types.js';
-import { LLMConfig } from './llm/factory.js';
-import { LLMProviderType } from './llm/types.js';
+import type { ITool } from './tools/types.js';
 import type { ILogger } from './contracts/logger.js';
 import { createNoOpLogger } from './observability/logger.js';
-import { mapProviderType } from './utils/llm-utils.js';
 import type { ISystemPromptBuilder } from './contracts/system-prompt-builder.js';
 import type { MemoryConfig } from './memory/types.js';
 import { TurnEngine, type TurnEngineConfig } from './core/turn-engine.js';
-
-export interface ProviderConfig {
-  type: LLMProviderType | 'openai_chat' | 'openai_completion' | 'anthropic';
-  model: string;
-  apiKey?: string;
-  baseUrl?: string;
-  timeout?: number;
-}
+import { type Provider, type Model, DefaultRuntimeProviderState } from './providers/index.js';
 
 export interface SkillDefinition {
   name: string;
@@ -30,28 +20,23 @@ export class Agent {
   private engine: AgentEngine | null = null;
   private pipeline: ChannelPipeline;
   private toolRegistry: ToolRegistry;
-  private registeredTools: ITool[] = [];
   private config: Partial<AgentConfig> = {};
   private deps: AgentDeps = {};
-  private chatId: string;
+  private defaultStateKey: string;
   private logger: ILogger;
 
-  constructor(chatId?: string, logger?: ILogger) {
-    this.chatId = chatId ?? `agent-${Date.now()}`;
+  constructor(stateKey?: string, logger?: ILogger) {
+    this.defaultStateKey = stateKey ?? `agent-${Date.now()}`;
     this.logger = logger ?? createNoOpLogger();
     this.toolRegistry = new ToolRegistry(this.logger);
     this.pipeline = new ChannelPipeline({ logger: this.logger });
   }
 
-  setProvider(provider: ProviderConfig): Agent {
-    const llmConfig: LLMConfig = {
-      provider: this.resolveProviderType(provider.type),
-      model: provider.model,
-      apiKey: provider.apiKey,
-      baseUrl: provider.baseUrl,
-      timeout: provider.timeout,
-    };
-    this.config.llm = llmConfig;
+  setProvider(provider: Provider, modelId?: string): Agent {
+    this.config.provider = provider;
+    if (modelId) {
+      this.config.initialModelId = modelId;
+    }
     return this;
   }
 
@@ -82,7 +67,9 @@ export class Agent {
 
   registerTool(tool: ITool): Agent {
     this.toolRegistry.register(tool);
-    this.registeredTools.push(tool);
+    if (this.engine) {
+      this.engine.getToolRegistry().register(tool);
+    }
     return this;
   }
 
@@ -100,18 +87,42 @@ export class Agent {
     return this;
   }
 
-  async run(input: string): Promise<AgentRunResult> {
+  async run(input: string | AgentRunInput): Promise<AgentRunResult> {
     const engine = this.getEngine();
     return engine.run(input);
   }
 
-  updateModel(model: string): void {
+  switchProvider(provider: Provider): void {
     if (this.engine) {
-      this.engine.updateModel(model);
+      this.engine.switchProvider(provider);
     }
-    if (this.config.llm) {
-      this.config.llm.model = model;
+  }
+
+  switchModel(modelId: string): void {
+    if (this.engine) {
+      this.engine.switchModel(modelId);
     }
+  }
+
+  getCurrentProvider(): Provider {
+    if (!this.engine) {
+      throw new Error('Agent not built yet. Call build() first.');
+    }
+    return this.engine.getCurrentProvider();
+  }
+
+  getCurrentModel(): Model {
+    if (!this.engine) {
+      throw new Error('Agent not built yet. Call build() first.');
+    }
+    return this.engine.getCurrentModel();
+  }
+
+  unregisterTool(toolName: string): boolean {
+    if (this.engine) {
+      return this.engine.unregisterTool(toolName);
+    }
+    return this.toolRegistry.unregister(toolName);
   }
 
   getToolRegistry(): ToolRegistry {
@@ -124,47 +135,37 @@ export class Agent {
 
   getEngine(): AgentEngine {
     if (!this.engine) {
-      if (!this.config.llm) {
+      if (!this.config.provider) {
         throw new Error('Provider not configured. Call setProvider() first.');
       }
 
       const agentConfig: AgentConfig = {
-        llm: this.config.llm,
+        provider: this.config.provider,
+        initialModelId: this.config.initialModelId,
         maxSteps: this.config.maxSteps,
         systemPrompt: this.config.systemPrompt,
-        tools: this.config.tools,
+        tools: Array.from(this.toolRegistry.getTools()),
         memoryConfig: this.config.memoryConfig,
       };
 
-      this.engine = new AgentEngine(this.chatId, agentConfig, {
+      this.engine = new AgentEngine(this.defaultStateKey, agentConfig, {
         ...this.deps,
         logger: this.logger,
       });
-
-      for (const tool of this.registeredTools) {
-        this.engine.getToolRegistry().register(tool);
-      }
     }
     return this.engine;
-  }
-
-  private resolveProviderType(type: ProviderConfig['type']): LLMProviderType {
-    if (typeof type === 'string') {
-      return mapProviderType(type);
-    }
-    return type;
   }
 }
 
 export class AgentBuilder {
   private agent: Agent;
 
-  constructor() {
-    this.agent = new Agent();
+  constructor(stateKey?: string, logger?: ILogger) {
+    this.agent = new Agent(stateKey, logger);
   }
 
-  setProvider(provider: ProviderConfig): AgentBuilder {
-    this.agent.setProvider(provider);
+  setProvider(provider: Provider, modelId?: string): AgentBuilder {
+    this.agent.setProvider(provider, modelId);
     return this;
   }
 
@@ -213,27 +214,8 @@ export class AgentBuilder {
   }
 }
 
-export function createAgent(config?: {
-  chatId?: string;
-  provider?: ProviderConfig;
-  systemPrompt?: string;
-  maxSteps?: number;
-  memoryConfig?: Partial<MemoryConfig>;
-  logger?: ILogger;
-  systemPromptBuilder?: ISystemPromptBuilder;
-}): AgentBuilder {
-  const builder = new AgentBuilder();
-
-  if (config) {
-    if (config.provider) builder.setProvider(config.provider);
-    if (config.systemPrompt) builder.setSystemPrompt(config.systemPrompt);
-    if (config.maxSteps) builder.setMaxSteps(config.maxSteps);
-    if (config.memoryConfig) builder.setMemoryConfig(config.memoryConfig);
-    if (config.logger) builder.setLogger(config.logger);
-    if (config.systemPromptBuilder) builder.setSystemPromptBuilder(config.systemPromptBuilder);
-  }
-
-  return builder;
+export function createAgent(provider: Provider, initialModelId?: string): AgentBuilder {
+  return new AgentBuilder().setProvider(provider, initialModelId);
 }
 
 export function createTurnEngine(config: TurnEngineConfig): TurnEngine {

@@ -283,7 +283,7 @@ export class UnifiedLLMClient {
       messages: params.messages,
       tools: params.tools || [],
       metadata: {
-        chatId: options?.sessionId || 'default',
+        chatId: options?.conversationId || 'default',
         senderId: options?.userId || 'user',
         traceId: options?.metadata?.traceId as string,
         maxTokens: options?.maxTokens,

@@ -65,6 +65,10 @@ export class ToolRegistry {
     return Array.from(this.tools.values()).map(tool => tool.getDefinition());
   }
 
+  getTools(): ITool[] {
+    return Array.from(this.tools.values());
+  }
+
   validateToolArguments(
     toolName: string,
     args: Record<string, unknown>

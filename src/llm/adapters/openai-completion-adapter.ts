@@ -70,6 +70,8 @@ export class OpenAICompletionAdapter implements ILLMProvider {
         model: this.model,
         prompt,
         stop: ['</tool_call >', '\n\n\n'],
+        ...(context.providerExtra ?? {}),
+        ...(context.modelExtraBody ?? {}),
       });
 
       const text = response.choices[0]?.text || '';
@@ -124,6 +126,8 @@ export class OpenAICompletionAdapter implements ILLMProvider {
         prompt,
         stop: ['</tool_call >', '\n\n\n'],
         stream: true,
+        ...(context.providerExtra ?? {}),
+        ...(context.modelExtraBody ?? {}),
       });
 
       let accumulatedText = '';

@@ -268,7 +268,7 @@ export interface UnifiedLLMClientConfig {
  * 统一请求选项接口
  */
 export interface UnifiedRequestOptions extends RequestOptions {
-  sessionId?: string;
+  conversationId?: string;
   userId?: string;
   metadata?: Record<string, unknown>;
 }

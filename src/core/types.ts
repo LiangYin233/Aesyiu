@@ -24,10 +24,6 @@ export interface PipelineState {
   config?: {
     config: unknown;
   };
-  session?: {
-    sessionContext: unknown;
-    sessionId: string;
-  };
   agent?: {
     llmConfig: unknown;
     systemPrompt: string;

@@ -27,6 +27,8 @@ export interface PromptContext {
   messages: StandardMessage[];
   tools: ToolDefinition[];
   metadata?: PromptMetadata;
+  providerExtra?: Record<string, unknown>;
+  modelExtraBody?: Record<string, unknown>;
 }
 
 export interface PromptContextOptions {

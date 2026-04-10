@@ -180,6 +180,8 @@ export class AnthropicAdapter implements ILLMProvider {
         messages: convertedMessages.messages,
         tools: anthropicTools.length > 0 ? anthropicTools : undefined,
         max_tokens: context.metadata?.maxTokens || 8192,
+        ...(context.providerExtra ?? {}),
+        ...(context.modelExtraBody ?? {}),
       });
 
       const toolCalls: ToolCall[] = [];
@@ -256,6 +258,8 @@ export class AnthropicAdapter implements ILLMProvider {
         messages: convertedMessages.messages,
         tools: anthropicTools.length > 0 ? anthropicTools : undefined,
         max_tokens: context.metadata?.maxTokens || 8192,
+        ...(context.providerExtra ?? {}),
+        ...(context.modelExtraBody ?? {}),
       });
 
       for await (const event of stream) {

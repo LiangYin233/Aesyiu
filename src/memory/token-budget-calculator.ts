@@ -15,15 +15,16 @@ export class TokenBudgetCalculator {
     this.config = { ...this.config, ...config };
   }
 
-  calculate(messages: StandardMessage[]): TokenBudget {
+  calculate(messages: StandardMessage[], runtimeContextWindow?: number): TokenBudget {
     const totalTokens = this.calculateTotalTokens(messages);
-    const usagePercentage = (totalTokens / this.config.maxContextTokens) * 100;
-    const compressionThresholdTokens = this.config.maxContextTokens * this.config.compressionThreshold;
+    const effectiveMaxTokens = runtimeContextWindow ?? this.config.maxContextTokens;
+    const usagePercentage = (totalTokens / effectiveMaxTokens) * 100;
+    const compressionThresholdTokens = effectiveMaxTokens * this.config.compressionThreshold;
     const needsCompression = totalTokens >= compressionThresholdTokens;
 
     return {
       currentTokens: totalTokens,
-      maxTokens: this.config.maxContextTokens,
+      maxTokens: effectiveMaxTokens,
       usagePercentage,
       needsCompression,
     };

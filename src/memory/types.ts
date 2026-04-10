@@ -10,6 +10,11 @@ export enum CompressionPhase {
 
 
 export interface MemoryConfig {
+  /**
+   * Fallback maximum context tokens.
+   * Used when no runtime model context window is set via `setRuntimeContextWindow()`.
+   * When a runtime context window is set, compression thresholds are computed against it instead.
+   */
   maxContextTokens: number;
   compressionThreshold: number;
   compressionProvider: string;
@@ -72,7 +77,7 @@ export interface MemoryEvent {
 
 export interface MemorySnapshot {
   version: number;
-  chatId: string;
+  stateKey: string;
   messages: StandardMessage[];
   stats: MemoryStats;
   config?: MemoryConfig;

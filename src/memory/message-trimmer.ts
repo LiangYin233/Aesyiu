@@ -15,16 +15,17 @@ export class MessageTrimmer {
     this.config = { ...this.config, ...config };
   }
 
-  checkAndTrim(message: StandardMessage | string): { message: StandardMessage | string; result?: TruncationResult } {
+  checkAndTrim(message: StandardMessage | string, runtimeContextWindow?: number): { message: StandardMessage | string; result?: TruncationResult } {
     const content = typeof message === 'string' ? message : message.content;
     const tokens = this.calculator.calculateSingleMessage(content);
-    const compressionThresholdTokens = this.config.maxContextTokens * this.config.compressionThreshold;
+    const effectiveMaxTokens = runtimeContextWindow ?? this.config.maxContextTokens;
+    const compressionThresholdTokens = effectiveMaxTokens * this.config.compressionThreshold;
 
     if (tokens < compressionThresholdTokens) {
       return { message };
     }
 
-    const result = this.trimMessage(content, tokens);
+    const result = this.trimMessage(content, tokens, runtimeContextWindow);
 
     if (typeof message === 'string') {
       return { message: result.preservedHead + result.warningMessage + result.preservedTail, result };
@@ -36,10 +37,11 @@ export class MessageTrimmer {
     };
   }
 
-  trimMessage(content: string, tokens?: number): TruncationResult {
+  trimMessage(content: string, tokens?: number, runtimeContextWindow?: number): TruncationResult {
     const originalLength = content.length;
     const estimatedTokens = tokens || this.calculator.calculateSingleMessage(content);
-    const compressionThresholdTokens = this.config.maxContextTokens * this.config.compressionThreshold;
+    const effectiveMaxTokens = runtimeContextWindow ?? this.config.maxContextTokens;
+    const compressionThresholdTokens = effectiveMaxTokens * this.config.compressionThreshold;
 
     if (estimatedTokens < compressionThresholdTokens) {
       return {

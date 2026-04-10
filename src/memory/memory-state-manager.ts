@@ -16,13 +16,13 @@ import { createNoOpLogger } from '../observability/logger.js';
 import type { ILogger } from '../contracts/logger.js';
 import type { ISystemPromptBuilder } from '../contracts/system-prompt-builder.js';
 
-export interface SessionMemoryManagerDependencies {
+export interface MemoryStateManagerDependencies {
   systemPromptBuilder: ISystemPromptBuilder;
   logger?: ILogger;
 }
 
-export class SessionMemoryManager {
-  readonly chatId: string;
+export class MemoryStateManager {
+  readonly stateKey: string;
   private messages: StandardMessage[] = [];
   private config: MemoryConfig;
   private calculator: TokenBudgetCalculator;
@@ -32,20 +32,21 @@ export class SessionMemoryManager {
   private compressionCount: number = 0;
   private lastCompressionTime?: Date;
   private eventListeners: Array<(_event: MemoryEvent) => void> = [];
-  private deps: SessionMemoryManagerDependencies;
+  private deps: MemoryStateManagerDependencies;
   private processingLock: Promise<void> | null = null;
   private logger: ILogger;
+  private runtimeContextWindow?: number;
 
   constructor(
-    chatId: string = 'default',
+    stateKey: string = 'default',
     config: Partial<MemoryConfig> | undefined,
-    deps: SessionMemoryManagerDependencies
+    deps: MemoryStateManagerDependencies
   ) {
     if (!deps.systemPromptBuilder) {
-      throw new Error('SessionMemoryManager requires systemPromptBuilder dependency');
+      throw new Error('MemoryStateManager requires systemPromptBuilder dependency');
     }
 
-    this.chatId = chatId;
+    this.stateKey = stateKey;
     this.config = createMemoryConfig(config);
     this.deps = deps;
     this.logger = deps.logger ?? createNoOpLogger();
@@ -56,11 +57,11 @@ export class SessionMemoryManager {
 
     this.logger.info(
       {
-        chatId: this.chatId,
+        stateKey: this.stateKey,
         maxTokens: this.config.maxContextTokens,
         compressionThreshold: this.config.compressionThreshold,
       },
-      'SessionMemoryManager 已初始化'
+      'MemoryStateManager initialized'
     );
   }
 
@@ -69,7 +70,12 @@ export class SessionMemoryManager {
     this.calculator.updateConfig(config);
     this.trimmer.updateConfig(config);
     this.summarizer.updateConfig(config);
-    this.logger.debug({ chatId: this.chatId, config: this.config as unknown as Record<string, unknown> }, 'Memory config updated');
+    this.logger.debug({ stateKey: this.stateKey, config: this.config as unknown as Record<string, unknown> }, 'Memory config updated');
+  }
+
+  setRuntimeContextWindow(contextWindow: number): void {
+    this.runtimeContextWindow = contextWindow;
+    this.logger.debug({ stateKey: this.stateKey, contextWindow }, 'Runtime context window set');
   }
 
   async addMessage(message: StandardMessage): Promise<void> {
@@ -91,12 +97,12 @@ export class SessionMemoryManager {
   private async doAddMessage(message: StandardMessage): Promise<void> {
     this.currentPhase = CompressionPhase.Monitoring;
 
-    const { message: processedMessage, result } = this.trimmer.checkAndTrim(message);
+    const { message: processedMessage, result } = this.trimmer.checkAndTrim(message, this.runtimeContextWindow);
 
     if (result?.wasTruncated) {
       this.logger.warn(
         {
-          chatId: this.chatId,
+          stateKey: this.stateKey,
           originalLength: result.originalLength,
           truncatedLength: result.truncatedLength,
           savings: `${this.trimmer.calculateSavingsPercentage(result).toFixed(2)}%`,
@@ -126,7 +132,7 @@ export class SessionMemoryManager {
     if (budget.needsCompression) {
       this.logger.info(
         {
-          chatId: this.chatId,
+          stateKey: this.stateKey,
           currentTokens: budget.currentTokens,
           threshold: this.config.compressionThreshold,
         },
@@ -159,7 +165,7 @@ export class SessionMemoryManager {
   }
 
   checkBudget(): TokenBudget {
-    return this.calculator.calculate(this.messages);
+    return this.calculator.calculate(this.messages, this.runtimeContextWindow);
   }
 
   getStats(): MemoryStats {
@@ -182,16 +188,16 @@ export class SessionMemoryManager {
 
   private async triggerCompression(): Promise<void> {
     this.currentPhase = CompressionPhase.SieveProcess;
-    this.logger.info({ chatId: this.chatId }, 'Phase 1: Safety classification...');
+    this.logger.info({ stateKey: this.stateKey }, 'Phase 1: Safety classification...');
 
     const zones = this.summarizer.sieveMessages(this.messages);
-    
+
     const sacredZones = zones.filter(z => z.zone === 'sacred');
     const compressibleZones = zones.filter(z => z.zone === 'compressible');
 
     this.logger.info(
       {
-        chatId: this.chatId,
+        stateKey: this.stateKey,
         totalZones: zones.length,
         sacredZones: sacredZones.length,
         compressibleZones: compressibleZones.length,
@@ -200,16 +206,16 @@ export class SessionMemoryManager {
     );
 
     this.currentPhase = CompressionPhase.LLMDrivenSummarization;
-    this.logger.info({ chatId: this.chatId }, 'Phase 2: AI compression...');
+    this.logger.info({ stateKey: this.stateKey }, 'Phase 2: AI compression...');
 
     try {
       const compressionResult = await this.summarizer.summarize(zones);
-      
+
       this.currentPhase = CompressionPhase.Reassembly;
-      this.logger.info({ chatId: this.chatId }, 'Phase 3: Context reorganization...');
+      this.logger.info({ stateKey: this.stateKey }, 'Phase 3: Context reorganization...');
 
       this.messages = this.summarizer.reassemble(zones, compressionResult);
-      
+
       this.compressionCount++;
       this.lastCompressionTime = new Date();
 
@@ -217,7 +223,7 @@ export class SessionMemoryManager {
 
       this.logger.info(
         {
-          chatId: this.chatId,
+          stateKey: this.stateKey,
           originalTokens: compressionResult.originalTokens,
           compressedTokens: compressionResult.compressedTokens,
           compressionRatio: `${(compressionResult.compressionRatio * 100).toFixed(2)}%`,
@@ -238,7 +244,7 @@ export class SessionMemoryManager {
 
       this.currentPhase = CompressionPhase.Idle;
     } catch (error) {
-      this.logger.error({ chatId: this.chatId, error: error as unknown }, '压缩流水线执行失败');
+      this.logger.error({ stateKey: this.stateKey, error: error as unknown }, '压缩流水线执行失败');
       this.currentPhase = CompressionPhase.Idle;
       throw error;
     }
@@ -246,7 +252,7 @@ export class SessionMemoryManager {
 
   async rebuildSystemContext(): Promise<void> {
     const systemPrompt = this.deps.systemPromptBuilder.buildSystemPrompt({
-      chatId: this.chatId,
+      chatId: this.stateKey,
     });
 
     if (this.messages.length > 0 && this.messages[0].role === MessageRole.System) {
@@ -262,7 +268,7 @@ export class SessionMemoryManager {
     }
 
     this.logger.info(
-      { chatId: this.chatId },
+      { stateKey: this.stateKey },
       '系统上下文已重建'
     );
   }
@@ -273,15 +279,15 @@ export class SessionMemoryManager {
     this.compressionCount = 0;
     this.lastCompressionTime = undefined;
     this.currentPhase = CompressionPhase.Idle;
-    
+
     try {
       await this.rebuildSystemContext();
     } catch (err) {
-      this.logger.error({ chatId: this.chatId, error: err as unknown }, '重建系统上下文失败');
+      this.logger.error({ stateKey: this.stateKey, error: err as unknown }, '重建系统上下文失败');
     }
-    
-    this.logger.debug({ chatId: this.chatId }, 'Session memory cleared');
-    
+
+    this.logger.debug({ stateKey: this.stateKey }, 'Memory state cleared');
+
     this.emitEvent({
       type: 'reset',
       timestamp: new Date(),
@@ -303,9 +309,9 @@ export class SessionMemoryManager {
       this.messages = [];
       return removed;
     }
-    
+
     const removed = this.messages.splice(this.messages.length - count, count);
-    this.logger.debug({ chatId: this.chatId, removedCount: removed.length }, 'Removed some historical messages');
+    this.logger.debug({ stateKey: this.stateKey, removedCount: removed.length }, 'Removed some historical messages');
     return removed;
   }
 
@@ -332,7 +338,7 @@ export class SessionMemoryManager {
   exportMemory(): MemorySnapshot {
     return {
       version: MEMORY_SNAPSHOT_VERSION,
-      chatId: this.chatId,
+      stateKey: this.stateKey,
       messages: this.getMessagesCopy(),
       stats: this.getStats(),
       config: this.config,
@@ -347,13 +353,13 @@ export class SessionMemoryManager {
     if (data.config) {
       this.updateConfig(data.config);
     }
-    
+
     this.messages = [...data.messages];
     this.calculator.clearCache();
-    
+
     this.logger.info(
-      { 
-        chatId: this.chatId,
+      {
+        stateKey: this.stateKey,
         importedMessages: this.messages.length,
       },
       '记忆已导入'
@@ -365,7 +371,7 @@ export class SessionMemoryManager {
 
     const hasSystemPrompt = this.messages[0]?.role === MessageRole.System;
     const hasContinuouslyUserMessages = this.validateUserMessageContinuity();
-    
+
     return hasSystemPrompt && hasContinuouslyUserMessages;
   }
 
@@ -373,7 +379,7 @@ export class SessionMemoryManager {
     for (let i = 1; i < this.messages.length; i++) {
       const prev = this.messages[i - 1];
       const curr = this.messages[i];
-      
+
       if (curr.role === MessageRole.Tool && prev.role !== MessageRole.Assistant) {
         return false;
       }

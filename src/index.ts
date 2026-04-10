@@ -1,14 +1,18 @@
 // Core
-export { AgentEngine, type AgentConfig, type AgentRunResult, type AgentDeps } from './core/agent.js';
+export { AgentEngine, type AgentConfig, type AgentRunInput, type AgentRunResult, type AgentDeps } from './core/agent.js';
 export { ChannelPipeline, type PipelineDeps } from './core/pipeline.js';
 export type { IUnifiedMessage, IOutboundMessage, IOutboundPayload, IChannelContext, PipelineState, MiddlewareFunc } from './core/types.js';
 export { MessageFactory } from './core/message-factory.js';
 export { RoleUtils } from './core/role-utils.js';
 export { TurnEngine, TurnStopReason, type TurnEngineConfig, type TurnInput, type TurnResult, type ToolCallRecord } from './core/turn-engine.js';
 
+// Providers
+export { ProviderType, type Model, type Provider, type RuntimeProviderState } from './providers/types.js';
+export { model, provider } from './providers/provider.js';
+export { DefaultRuntimeProviderState } from './providers/runtime-provider-state.js';
+
 // LLM
-export { UnifiedLLMClient, createUnifiedLLMClient } from './llm/unified-client.js';
-export { LLMProviderFactory, type LLMConfig } from './llm/factory.js';
+export { LLMProviderFactory } from './llm/factory.js';
 export type {
   MessageRole,
   StandardMessage,
@@ -28,6 +32,7 @@ export type {
   GenerateParams,
   ModelPricing,
 } from './llm/types.js';
+export { DynamicLLMClient } from './llm/dynamic-client.js';
 export type { PromptContext, PromptContextOptions, SystemContext, PromptMetadata } from './llm/prompt-context.js';
 
 // LLM Adapters
@@ -51,15 +56,7 @@ export * from './memory/types.js';
 export { TokenBudgetCalculator } from './memory/token-budget-calculator.js';
 export { MessageTrimmer } from './memory/message-trimmer.js';
 export { LosslessSummarizer } from './memory/lossless-summarizer.js';
-export { SessionMemoryManager, type SessionMemoryManagerDependencies } from './memory/session-memory-manager.js';
-
-// Session
-export { SessionRegistry } from './session/session-registry.js';
-export { SessionId, type SessionIdComponents } from './session/session-id.js';
-export { createSessionMetadata, type SessionMetadata, type SessionContext } from './session/session-context.js';
-export type { SessionOptions, SessionConfig } from './session/types.js';
-export { DEFAULT_SESSION_CONFIG } from './session/types.js';
-export { SessionAdapter, type SessionAdapterConfig } from './session/session-adapter.js';
+export { MemoryStateManager, type MemoryStateManagerDependencies } from './memory/memory-state-manager.js';
 
 // Tools
 export { ToolRegistry, type ToolValidationError, type ToolExecutionReport } from './tools/registry.js';
@@ -78,4 +75,4 @@ export type { ISystemPromptBuilder, PromptBuildContext } from './contracts/syste
 export { mapProviderType } from './utils/llm-utils.js';
 
 // Public API
-export { createAgent, AgentBuilder, Agent, type ProviderConfig, type SkillDefinition } from './api.js';
+export { createAgent, createTurnEngine, AgentBuilder, Agent, type SkillDefinition } from './api.js';
