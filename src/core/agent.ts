@@ -25,6 +25,7 @@ import { createNoOpLogger } from '../observability/logger.js';
 export interface AgentDeps {
   logger?: ILogger;
   systemPromptBuilder?: ISystemPromptBuilder;
+  memory?: SessionMemoryManager;
 }
 
 export interface AgentConfig {
@@ -84,15 +85,28 @@ export class AgentEngine {
     this.tools = this.config.tools;
     this.maxSteps = this.config.maxSteps;
 
-    const memoryDeps: SessionMemoryManagerDependencies = {
-      systemPromptBuilder: deps.systemPromptBuilder ?? new FallbackSystemPromptBuilder(),
-      logger: this.logger,
-    };
+    if (deps.memory) {
+      this.memory = deps.memory;
+      this.logger.info(
+        { chatId: this.chatId, instanceId: this.instanceId },
+        'AgentEngine using injected SessionMemoryManager'
+      );
+    } else {
+      const memoryDeps: SessionMemoryManagerDependencies = {
+        systemPromptBuilder: deps.systemPromptBuilder ?? new FallbackSystemPromptBuilder(),
+        logger: this.logger,
+      };
 
-    this.memory = new SessionMemoryManager(chatId, this.config.memoryConfig, memoryDeps);
+      this.memory = new SessionMemoryManager(chatId, this.config.memoryConfig, memoryDeps);
 
-    if (!this.memory.hasMessages() && this.config.systemPrompt) {
-      this.memory.addMessage(MessageFactory.createSystemMessage(this.config.systemPrompt));
+      this.logger.warn(
+        { chatId: this.chatId },
+        'AgentEngine creating internal SessionMemoryManager. Inject memory via deps.memory for proper session management. This fallback will be removed in a future version.'
+      );
+
+      if (!this.memory.hasMessages() && this.config.systemPrompt) {
+        this.memory.addMessage(MessageFactory.createSystemMessage(this.config.systemPrompt));
+      }
     }
 
     this.logger.info(

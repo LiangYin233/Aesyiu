@@ -70,6 +70,16 @@ export interface MemoryEvent {
   };
 }
 
+export interface MemorySnapshot {
+  version: number;
+  chatId: string;
+  messages: StandardMessage[];
+  stats: MemoryStats;
+  config?: MemoryConfig;
+}
+
+export const MEMORY_SNAPSHOT_VERSION = 1;
+
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   maxContextTokens: 128000,
   compressionThreshold: 0.75,

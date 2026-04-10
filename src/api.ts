@@ -1,8 +1,8 @@
 import { AgentEngine, AgentConfig, AgentRunResult, AgentDeps } from './core/agent.js';
-import { ChannelPipeline, PipelineDeps } from './core/pipeline.js';
-import { MiddlewareFunc, IChannelContext, IUnifiedMessage, IOutboundPayload } from './core/types.js';
+import { ChannelPipeline } from './core/pipeline.js';
+import { MiddlewareFunc } from './core/types.js';
 import { ToolRegistry } from './tools/registry.js';
-import { ITool, ToolDefinition, ToolExecuteContext } from './tools/types.js';
+import { ITool } from './tools/types.js';
 import { LLMConfig } from './llm/factory.js';
 import { LLMProviderType } from './llm/types.js';
 import type { ILogger } from './contracts/logger.js';
@@ -10,6 +10,7 @@ import { createNoOpLogger } from './observability/logger.js';
 import { mapProviderType } from './utils/llm-utils.js';
 import type { ISystemPromptBuilder } from './contracts/system-prompt-builder.js';
 import type { MemoryConfig } from './memory/types.js';
+import { TurnEngine, type TurnEngineConfig } from './core/turn-engine.js';
 
 export interface ProviderConfig {
   type: LLMProviderType | 'openai_chat' | 'openai_completion' | 'anthropic';
@@ -32,7 +33,6 @@ export class Agent {
   private registeredTools: ITool[] = [];
   private config: Partial<AgentConfig> = {};
   private deps: AgentDeps = {};
-  private pipelineDeps: PipelineDeps = {};
   private chatId: string;
   private logger: ILogger;
 
@@ -234,4 +234,8 @@ export function createAgent(config?: {
   }
 
   return builder;
+}
+
+export function createTurnEngine(config: TurnEngineConfig): TurnEngine {
+  return new TurnEngine(config);
 }

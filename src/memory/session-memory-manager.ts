@@ -5,6 +5,8 @@ import {
   CompressionPhase,
   MemoryEvent,
   TokenBudget,
+  MemorySnapshot,
+  MEMORY_SNAPSHOT_VERSION,
   createMemoryConfig,
 } from './types.js';
 import { TokenBudgetCalculator } from './token-budget-calculator.js';
@@ -35,7 +37,7 @@ export class SessionMemoryManager {
   private logger: ILogger;
 
   constructor(
-    chatId: string,
+    chatId: string = 'default',
     config: Partial<MemoryConfig> | undefined,
     deps: SessionMemoryManagerDependencies
   ) {
@@ -327,13 +329,9 @@ export class SessionMemoryManager {
     }
   }
 
-  exportMemory(): {
-    chatId: string;
-    messages: StandardMessage[];
-    stats: MemoryStats;
-    config: MemoryConfig;
-  } {
+  exportMemory(): MemorySnapshot {
     return {
+      version: MEMORY_SNAPSHOT_VERSION,
       chatId: this.chatId,
       messages: this.getMessagesCopy(),
       stats: this.getStats(),
@@ -341,7 +339,11 @@ export class SessionMemoryManager {
     };
   }
 
-  importMemory(data: { messages: StandardMessage[]; config?: Partial<MemoryConfig> }): void {
+  importMemory(data: MemorySnapshot): void {
+    if (data.version !== MEMORY_SNAPSHOT_VERSION) {
+      throw new Error(`Unsupported memory snapshot version: ${data.version}. Expected version: ${MEMORY_SNAPSHOT_VERSION}`);
+    }
+
     if (data.config) {
       this.updateConfig(data.config);
     }

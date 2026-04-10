@@ -4,6 +4,7 @@ export { ChannelPipeline, type PipelineDeps } from './core/pipeline.js';
 export type { IUnifiedMessage, IOutboundMessage, IOutboundPayload, IChannelContext, PipelineState, MiddlewareFunc } from './core/types.js';
 export { MessageFactory } from './core/message-factory.js';
 export { RoleUtils } from './core/role-utils.js';
+export { TurnEngine, TurnStopReason, type TurnEngineConfig, type TurnInput, type TurnResult, type ToolCallRecord } from './core/turn-engine.js';
 
 // LLM
 export { UnifiedLLMClient, createUnifiedLLMClient } from './llm/unified-client.js';
@@ -58,6 +59,7 @@ export { SessionId, type SessionIdComponents } from './session/session-id.js';
 export { createSessionMetadata, type SessionMetadata, type SessionContext } from './session/session-context.js';
 export type { SessionOptions, SessionConfig } from './session/types.js';
 export { DEFAULT_SESSION_CONFIG } from './session/types.js';
+export { SessionAdapter, type SessionAdapterConfig } from './session/session-adapter.js';
 
 // Tools
 export { ToolRegistry, type ToolValidationError, type ToolExecutionReport } from './tools/registry.js';

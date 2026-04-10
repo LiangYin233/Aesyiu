@@ -109,6 +109,10 @@ export class SessionRegistry {
       systemPrompt,
       tools: [],
       memoryConfig: memoryConfig,
+    }, {
+      systemPromptBuilder: this.deps.systemPromptBuilder,
+      logger: this.logger,
+      memory,
     });
   }
 
