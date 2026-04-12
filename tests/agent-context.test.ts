@@ -26,11 +26,14 @@ class MockProvider extends LLMProvider {
 describe('AgentContext', () => {
   const model1: ModelDefinition = { id: 'model-1', contextWindow: 128000, maxOutputTokens: 4096 };
   const model2: ModelDefinition = { id: 'model-2', contextWindow: 64000, maxOutputTokens: 2048 };
+  const otherModel: ModelDefinition = { id: 'other-model', contextWindow: 32000, maxOutputTokens: 1024 };
 
-  function createContext(defaultProvider = 'test', defaultModel = 'model-1') {
-    const provider = new MockProvider('test', { apiKey: 'key' }, [model1, model2]);
-    const providers = new Map([['test', provider]]);
-    return new AgentContext({ providers, defaultProvider, defaultModel });
+  function createProvider(name = 'test', models: ModelDefinition[] = [model1, model2]) {
+    return new MockProvider(name, { apiKey: 'key' }, models);
+  }
+
+  function createContext(provider = createProvider(), modelId = 'model-1') {
+    return new AgentContext({ provider, modelId });
   }
 
   describe('initialization', () => {
@@ -41,30 +44,41 @@ describe('AgentContext', () => {
       expect(ctx.sessionUsage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
     });
 
-    it('should call switchLLM with default provider on init', () => {
+    it('should initialize with the provided provider and model', () => {
       const ctx = createContext();
       expect(ctx.activeProvider.name).toBe('test');
+      expect(ctx.activeModel.id).toBe('model-1');
+    });
+
+    it('should fall back to the provider first model when no modelId is provided', () => {
+      const provider = createProvider();
+      const ctx = new AgentContext({ provider });
+      expect(ctx.activeProvider).toBe(provider);
       expect(ctx.activeModel.id).toBe('model-1');
     });
   });
 
   describe('switchLLM', () => {
-    it('should switch to specified provider and model', () => {
+    it('should switch to specified provider instance and model', () => {
       const ctx = createContext();
-      ctx.switchLLM('test', 'model-2');
-      expect(ctx.activeModel.id).toBe('model-2');
+      const otherProvider = createProvider('other', [otherModel]);
+      ctx.switchLLM(otherProvider, 'other-model');
+      expect(ctx.activeProvider).toBe(otherProvider);
+      expect(ctx.activeModel.id).toBe('other-model');
     });
 
     it('should fall back to first model when no modelId specified', () => {
       const ctx = createContext();
-      ctx.switchLLM('test');
-      expect(ctx.activeModel.id).toBe('model-1');
+      const otherProvider = createProvider('other', [otherModel]);
+      ctx.switchLLM(otherProvider);
+      expect(ctx.activeProvider).toBe(otherProvider);
+      expect(ctx.activeModel.id).toBe('other-model');
     });
 
-    it('should throw error for nonexistent provider', () => {
+    it('should throw error for nonexistent model on the provider', () => {
       const ctx = createContext();
       const before = ctx.activeProvider;
-      expect(() => ctx.switchLLM('nonexistent')).toThrow('Provider "nonexistent" not found');
+      expect(() => ctx.switchLLM(before, 'missing-model')).toThrow('Model "missing-model" not found in provider "test"');
       expect(ctx.activeProvider).toBe(before);
     });
   });

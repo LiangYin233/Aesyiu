@@ -35,9 +35,7 @@ describe('E2E: Think-Act-Observe loop', () => {
     const provider = new MockProvider({ apiKey: 'test' }, [
       { id: 'mock-model', contextWindow: 128000, maxOutputTokens: 4096 },
     ]);
-    const providers = new Map<string, LLMProvider>();
-    providers.set('mock', provider);
-    const ctx = new AgentContext({ providers, defaultProvider: 'mock' });
+    const ctx = new AgentContext({ provider });
 
     const weatherTool: Tool = {
       name: 'get_weather',
@@ -82,9 +80,7 @@ describe('E2E: Think-Act-Observe loop', () => {
     const provider = new MockProvider({ apiKey: 'test' }, [
       { id: 'mock-model', contextWindow: 128000, maxOutputTokens: 4096 },
     ]);
-    const providers = new Map<string, LLMProvider>();
-    providers.set('mock', provider);
-    const ctx = new AgentContext({ providers, defaultProvider: 'mock' });
+    const ctx = new AgentContext({ provider });
 
     const calcTool: Tool = {
       name: 'calculate',
@@ -132,9 +128,7 @@ describe('E2E: Think-Act-Observe loop', () => {
     const provider = new MockProvider({ apiKey: 'test' }, [
       { id: 'mock-model', contextWindow: 128000, maxOutputTokens: 4096 },
     ]);
-    const providers = new Map<string, LLMProvider>();
-    providers.set('mock', provider);
-    const ctx = new AgentContext({ providers, defaultProvider: 'mock' });
+    const ctx = new AgentContext({ provider });
 
     const engine = new AesyiuEngine({ maxSteps: 10 });
 
@@ -154,5 +148,32 @@ describe('E2E: Think-Act-Observe loop', () => {
     expect(result.status).toBe('completed');
     expect(middlewareCalled).toBe(true);
     expect(ctx.state.requestId).toBe('req-123');
+  });
+
+  it('should let middleware switch to another provider instance during runtime', async () => {
+    resetMocks();
+    const providerA = new MockProvider({ apiKey: 'test' }, [
+      { id: 'model-a', contextWindow: 128000, maxOutputTokens: 4096 },
+    ]);
+    const providerB = new MockProvider({ apiKey: 'test' }, [
+      { id: 'model-b', contextWindow: 128000, maxOutputTokens: 4096 },
+    ]);
+    const ctx = new AgentContext({ provider: providerA, modelId: 'model-a' });
+
+    const engine = new AesyiuEngine({ maxSteps: 10 });
+    engine.use(async (c, next) => {
+      c.switchLLM(providerB, 'model-b');
+      await next();
+    });
+
+    generateResponses = [
+      { message: { role: 'assistant', content: 'Hello from switched provider' }, usage: { promptTokens: 50, completionTokens: 10, totalTokens: 60 } },
+    ];
+
+    const result = await engine.run({ role: 'user', content: 'Hi' }, ctx);
+
+    expect(result.status).toBe('completed');
+    expect(ctx.activeProvider).toBe(providerB);
+    expect(ctx.activeModel.id).toBe('model-b');
   });
 });

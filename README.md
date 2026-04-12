@@ -41,8 +41,7 @@ const skills = await loadSkills('./skills');
 const engine = new AesyiuEngine().registerSkills(skills);
 
 const ctx = new AgentContext({
-  providers,
-  defaultProvider: 'openai-responses',
+  provider,
 });
 
 await engine.run({ role: 'user', content: 'Help me write release notes' }, ctx);

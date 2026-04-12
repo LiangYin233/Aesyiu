@@ -1,10 +1,9 @@
-import type { Message, TokenUsage, ModelDefinition, ProviderConfig } from '../types/index.js';
+import type { Message, TokenUsage, ModelDefinition } from '../types/index.js';
 import type { LLMProvider } from '../provider/index.js';
 
 export interface AgentContextConfig {
-  providers: Map<string, LLMProvider>;
-  defaultProvider: string;
-  defaultModel?: string;
+  provider: LLMProvider;
+  modelId?: string;
 }
 
 export class AgentContext {
@@ -13,21 +12,15 @@ export class AgentContext {
   public sessionUsage: TokenUsage;
   public activeProvider!: LLMProvider;
   public activeModel!: ModelDefinition;
-  private availableProviders: Map<string, LLMProvider>;
 
   constructor(config: AgentContextConfig) {
     this.messages = [];
     this.state = {};
     this.sessionUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    this.availableProviders = config.providers;
-    this.switchLLM(config.defaultProvider, config.defaultModel);
+    this.switchLLM(config.provider, config.modelId);
   }
 
-  public switchLLM(providerName: string, modelId?: string): void {
-    const provider = this.availableProviders.get(providerName);
-    if (!provider) {
-      throw new Error(`Provider "${providerName}" not found`);
-    }
+  public switchLLM(provider: LLMProvider, modelId?: string): void {
     this.activeProvider = provider;
     const resolvedModelId = modelId ?? Array.from(provider.supportedModels.keys())[0];
     this.activeModel = provider.getModel(resolvedModelId);

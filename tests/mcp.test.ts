@@ -46,10 +46,7 @@ class MockProvider extends LLMProvider {
 }
 
 function createContext(provider: LLMProvider): AgentContext {
-  return new AgentContext({
-    providers: new Map([['mock', provider]]),
-    defaultProvider: 'mock',
-  });
+  return new AgentContext({ provider });
 }
 
 function createServerConfig(name = 'fixtures'): MCPServerConfig {

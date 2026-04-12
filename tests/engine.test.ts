@@ -30,8 +30,7 @@ class MockProvider extends LLMProvider {
 }
 
 function createContext(provider: LLMProvider): AgentContext {
-  const providers = new Map([['mock', provider]]);
-  return new AgentContext({ providers, defaultProvider: 'mock' });
+  return new AgentContext({ provider });
 }
 
 describe('AesyiuEngine', () => {
