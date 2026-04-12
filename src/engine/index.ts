@@ -1,5 +1,6 @@
 import type { AgentContext } from '../context/index.js';
 import type { Message, Tool, EngineResult, TokenUsage } from '../types/index.js';
+import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager } from '../memory/index.js';
 import { ToolExecutor } from '../tool/index.js';
 
@@ -42,12 +43,15 @@ function compose(middlewares: Middleware[], core: (ctx: AgentContext) => Promise
 
 export class AesyiuEngine {
   private globalTools: Map<string, Tool> = new Map();
+  private mcpToolNames: Set<string> = new Set();
   private middlewares: Middleware[] = [];
   private maxSteps: number;
+  private mcpManager: MCPManager;
   private memoryManager: MemoryManager;
 
   constructor(config?: AesyiuEngineConfig) {
     this.maxSteps = config?.maxSteps ?? 10;
+    this.mcpManager = new MCPManager();
     this.memoryManager = config?.memoryManager ?? new MemoryManager({
       compressThresholdRatio: 0.8,
       retainLatestMessages: 5,
@@ -62,6 +66,35 @@ export class AesyiuEngine {
   public registerTool(tool: Tool): this {
     this.globalTools.set(tool.name, tool);
     return this;
+  }
+
+  public async registerMCPServer(config: MCPServerConfig): Promise<this> {
+    const tools = await this.mcpManager.registerServer(config);
+
+    for (const tool of tools) {
+      this.globalTools.set(tool.name, tool);
+      this.mcpToolNames.add(tool.name);
+    }
+
+    return this;
+  }
+
+  public async registerMCPServers(configs: MCPServerConfig[]): Promise<this> {
+    for (const config of configs) {
+      await this.registerMCPServer(config);
+    }
+
+    return this;
+  }
+
+  public async dispose(): Promise<void> {
+    await this.mcpManager.dispose();
+
+    for (const toolName of this.mcpToolNames) {
+      this.globalTools.delete(toolName);
+    }
+
+    this.mcpToolNames.clear();
   }
 
   public async run(input: Message, ctx: AgentContext): Promise<EngineResult> {

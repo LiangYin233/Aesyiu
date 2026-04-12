@@ -5,6 +5,8 @@ export { AnthropicProvider, ANTHROPIC_MODELS } from './provider/anthropic/index.
 export { OpenAIResponsesProvider, OPENAI_RESPONSES_MODELS } from './provider/openai-responses/index.js';
 export { OpenAICompletionProvider, OPENAI_COMPLETION_MODELS } from './provider/openai-completion/index.js';
 export { MemoryManager } from './memory/index.js';
+export { MCPManager, namespaceMCPToolName } from './mcp/index.js';
 export { ToolExecutor } from './tool/index.js';
 export { AesyiuEngine } from './engine/index.js';
 export type { Middleware } from './engine/index.js';
+export type { MCPServerConfig } from './mcp/index.js';
