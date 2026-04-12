@@ -21,9 +21,10 @@ export class AgentContext {
   }
 
   public switchLLM(provider: LLMProvider, modelId?: string): void {
-    this.activeProvider = provider;
     const resolvedModelId = modelId ?? Array.from(provider.supportedModels.keys())[0];
-    this.activeModel = provider.getModel(resolvedModelId);
+    const resolvedModel = provider.getModel(resolvedModelId);
+    this.activeProvider = provider;
+    this.activeModel = resolvedModel;
   }
 
   public accumulateUsage(usage: TokenUsage): void {
