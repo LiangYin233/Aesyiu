@@ -1,29 +1,24 @@
 {
   "name": "aesyiu",
   "version": "0.1.0",
-  "description": "Core Agent framework library - extract from AesyClaw",
+  "description": "Stateless, high-concurrency AI Agent framework with onion-model middleware and dynamic LLM switching",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.82.0",
-    "openai": "^6.33.0"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "typescript": "^6.0.2"
-  },
-  "peerDependencies": {},
-  "files": [
-    "dist"
-  ]
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5",
+    "@types/node": "^22.9.0",
+    "eslint": "^9.14.0",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0"
+  }
 }
