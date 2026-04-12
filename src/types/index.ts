@@ -13,6 +13,7 @@ export interface Message {
   tool_call_id?: string;
   _meta?: {
     isPinned?: boolean;
+    skillPrompt?: boolean;
   };
 }
 

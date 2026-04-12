@@ -2,6 +2,7 @@ import type { AgentContext } from '../context/index.js';
 import type { Message, Tool, EngineResult, TokenUsage } from '../types/index.js';
 import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager } from '../memory/index.js';
+import { createLoadSkillTool, createSkillsPromptMessage, type AgentSkill } from '../skill/index.js';
 import { ToolExecutor } from '../tool/index.js';
 
 export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
@@ -48,6 +49,7 @@ export class AesyiuEngine {
   private maxSteps: number;
   private mcpManager: MCPManager;
   private memoryManager: MemoryManager;
+  private registeredSkills: AgentSkill[] = [];
 
   constructor(config?: AesyiuEngineConfig) {
     this.maxSteps = config?.maxSteps ?? 10;
@@ -65,6 +67,22 @@ export class AesyiuEngine {
 
   public registerTool(tool: Tool): this {
     this.globalTools.set(tool.name, tool);
+    return this;
+  }
+
+  public registerSkills(skills: AgentSkill[]): this {
+    if (skills.length === 0) {
+      this.registeredSkills = [];
+      this.globalTools.delete('loadskill');
+      return this;
+    }
+
+    if (this.globalTools.has('loadskill') && this.registeredSkills.length === 0) {
+      throw new Error('Tool "loadskill" is already registered');
+    }
+
+    this.registeredSkills = [...skills];
+    this.globalTools.set('loadskill', createLoadSkillTool(this.registeredSkills));
     return this;
   }
 
@@ -98,6 +116,7 @@ export class AesyiuEngine {
   }
 
   public async run(input: Message, ctx: AgentContext): Promise<EngineResult> {
+    this.injectSkillPrompt(ctx);
     ctx.messages.push(input);
 
     const chain = compose(this.middlewares, (c) => this._reactLoop(c));
@@ -136,5 +155,26 @@ export class AesyiuEngine {
     }
 
     return { status: 'max_steps_reached', messages: ctx.messages, usage: ctx.sessionUsage };
+  }
+
+  private injectSkillPrompt(ctx: AgentContext): void {
+    const promptMessage = createSkillsPromptMessage(this.registeredSkills);
+    if (!promptMessage) {
+      return;
+    }
+
+    const existingPromptIndex = ctx.messages.findIndex((message) => message._meta?.skillPrompt);
+    if (existingPromptIndex >= 0) {
+      ctx.messages[existingPromptIndex] = promptMessage;
+      return;
+    }
+
+    const insertIndex = ctx.messages.findIndex((message) => message.role !== 'system');
+    if (insertIndex === -1) {
+      ctx.messages.push(promptMessage);
+      return;
+    }
+
+    ctx.messages.splice(insertIndex, 0, promptMessage);
   }
 }
