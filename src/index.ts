@@ -1,6 +1,9 @@
 export type { Role, ToolCall, Message, TokenUsage, ModelDefinition, ProviderConfig, EngineResult, Tool } from './types/index.js';
 export { AgentContext } from './context/index.js';
 export { LLMProvider } from './provider/index.js';
+export { AnthropicProvider, ANTHROPIC_MODELS } from './provider/anthropic/index.js';
+export { OpenAIResponsesProvider, OPENAI_RESPONSES_MODELS } from './provider/openai-responses/index.js';
+export { OpenAICompletionProvider, OPENAI_COMPLETION_MODELS } from './provider/openai-completion/index.js';
 export { MemoryManager } from './memory/index.js';
 export { ToolExecutor } from './tool/index.js';
 export { AesyiuEngine } from './engine/index.js';

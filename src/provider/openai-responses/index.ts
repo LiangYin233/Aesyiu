@@ -1,0 +1,219 @@
+import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage } from '../../types/index.js';
+import { LLMProvider } from '../index.js';
+
+export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
+  { id: 'gpt-4o', contextWindow: 128000, maxOutputTokens: 16384 },
+  { id: 'gpt-4o-mini', contextWindow: 128000, maxOutputTokens: 16384 },
+];
+
+export class OpenAIResponsesProvider extends LLMProvider {
+  private client: OpenAI;
+
+  constructor(config: ProviderConfig, models: ModelDefinition[]) {
+    try {
+      require('openai');
+    } catch {
+      throw new Error(
+        'openai is required for OpenAIResponsesProvider. Install it with: npm install openai',
+      );
+    }
+    super('openai-responses', config, models);
+
+    const clientConfig: OpenAIClientOptions = { apiKey: config.apiKey };
+    if (config.baseURL) {
+      clientConfig.baseURL = config.baseURL;
+    }
+    this.client = new OpenAI(clientConfig);
+  }
+
+  private toSDKInput(messages: Message[]): OpenAI.Responses.ResponseInputItem[] {
+    const input: OpenAI.Responses.ResponseInputItem[] = [];
+
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        input.push({
+          role: 'system',
+          content: msg.content ?? '',
+        } as OpenAI.Responses.EasyInputMessage);
+        continue;
+      }
+
+      if (msg.role === 'tool') {
+        input.push({
+          type: 'function_call_output',
+          call_id: msg.tool_call_id ?? '',
+          output: msg.content ?? '',
+        } as OpenAI.Responses.ResponseInputItem.FunctionCallOutput);
+        continue;
+      }
+
+      if (msg.role === 'assistant') {
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+          for (const tc of msg.tool_calls) {
+            input.push({
+              type: 'function_call',
+              call_id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments,
+            } as OpenAI.Responses.ResponseFunctionToolCall);
+          }
+          if (msg.content) {
+            input.push({
+              role: 'assistant',
+              content: msg.content,
+            } as OpenAI.Responses.EasyInputMessage);
+          }
+        } else {
+          input.push({
+            role: 'assistant',
+            content: msg.content ?? '',
+          } as OpenAI.Responses.EasyInputMessage);
+        }
+        continue;
+      }
+
+      input.push({
+        role: msg.role as 'user' | 'developer',
+        content: msg.content ?? '',
+      } as OpenAI.Responses.EasyInputMessage);
+    }
+
+    return input;
+  }
+
+  private toSDKTools(tools?: Tool[]): OpenAI.Responses.Tool[] | undefined {
+    if (!tools || tools.length === 0) return undefined;
+    return tools.map((tool) => ({
+      type: 'function' as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters as Record<string, unknown> | null,
+      strict: null,
+    }));
+  }
+
+  private fromSDKResponse(response: OpenAI.Responses.Response): { message: Message; usage: TokenUsage } {
+    const textParts: string[] = [];
+    const toolCalls: { id: string; name: string; arguments: string }[] = [];
+
+    for (const item of response.output) {
+      if (item.type === 'message') {
+        const msgItem = item as OpenAI.Responses.ResponseOutputMessage;
+        for (const content of msgItem.content) {
+          if (content.type === 'output_text') {
+            textParts.push((content as OpenAI.Responses.ResponseOutputText).text);
+          }
+        }
+      } else if (item.type === 'function_call') {
+        const fc = item as OpenAI.Responses.ResponseFunctionToolCall;
+        toolCalls.push({
+          id: fc.call_id,
+          name: fc.name,
+          arguments: fc.arguments,
+        });
+      }
+    }
+
+    const message: Message = {
+      role: 'assistant',
+      content: textParts.length > 0 ? textParts.join('') : (toolCalls.length > 0 ? null : ''),
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    };
+
+    const usage: TokenUsage = {
+      promptTokens: response.usage?.input_tokens ?? 0,
+      completionTokens: response.usage?.output_tokens ?? 0,
+      totalTokens: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+    };
+
+    return { message, usage };
+  }
+
+  public async generate(
+    modelDef: ModelDefinition,
+    messages: Message[],
+    tools?: Tool[],
+  ): Promise<{ message: Message; usage: TokenUsage }> {
+    try {
+      const input = this.toSDKInput(messages);
+      const params: Record<string, any> = {
+        model: modelDef.id,
+        input,
+      };
+      const sdkTools = this.toSDKTools(tools);
+      if (sdkTools) {
+        params.tools = sdkTools;
+      }
+      const merged = this.mergeExtraBody(params, modelDef.extraBody);
+      const response = await this.client.responses.create(merged as OpenAI.Responses.ResponseCreateParamsNonStreaming);
+      return this.fromSDKResponse(response);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  public async *generateStream(
+    modelDef: ModelDefinition,
+    messages: Message[],
+    tools?: Tool[],
+  ): AsyncGenerator<{ message: Partial<Message>; usage?: TokenUsage }> {
+    try {
+      const input = this.toSDKInput(messages);
+      const params: Record<string, any> = {
+        model: modelDef.id,
+        input,
+      };
+      const sdkTools = this.toSDKTools(tools);
+      if (sdkTools) {
+        params.tools = sdkTools;
+      }
+      const merged = this.mergeExtraBody(params, modelDef.extraBody);
+      const mergeStream = this.mergeExtraBody({ ...merged, stream: true }, modelDef.extraBody);
+
+      const stream = await this.client.responses.create(mergeStream as OpenAI.Responses.ResponseCreateParamsStreaming);
+
+      let content = '';
+      const toolCalls: { id: string; name: string; arguments: string }[] = [];
+      let currentCallArgs = '';
+      let finalUsage: TokenUsage | undefined;
+
+      for await (const event of stream) {
+        if (event.type === 'response.output_text.delta') {
+          content += (event as any).delta ?? '';
+          yield { message: { role: 'assistant', content } };
+        } else if (event.type === 'response.function_call_arguments.delta') {
+          currentCallArgs += (event as any).delta ?? '';
+        } else if (event.type === 'response.output_item.done') {
+          const item = (event as any).item;
+          if (item?.type === 'function_call') {
+            toolCalls.push({
+              id: item.call_id ?? '',
+              name: item.name ?? '',
+              arguments: currentCallArgs || item.arguments || '{}',
+            });
+            currentCallArgs = '';
+          }
+        } else if (event.type === 'response.completed') {
+          const resp = (event as any).response;
+          if (resp?.usage) {
+            finalUsage = {
+              promptTokens: resp.usage.input_tokens ?? 0,
+              completionTokens: resp.usage.output_tokens ?? 0,
+              totalTokens: (resp.usage.input_tokens ?? 0) + (resp.usage.output_tokens ?? 0),
+            };
+          }
+        }
+      }
+
+      const finalMessage: Message = {
+        role: 'assistant',
+        content: content || null,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      };
+      yield { message: finalMessage, usage: finalUsage };
+    } catch (error) {
+      throw error;
+    }
+  }
+}

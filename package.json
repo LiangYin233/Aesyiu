@@ -13,12 +13,26 @@
   "dependencies": {
     "zod": "^3.23.8"
   },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.30.0",
+    "openai": ">=4.70.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "vitest": "^2.1.5",
+    "@anthropic-ai/sdk": "^0.88.0",
     "@types/node": "^22.9.0",
-    "eslint": "^9.14.0",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
-    "@typescript-eslint/parser": "^8.15.0"
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.14.0",
+    "openai": "^6.34.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
   }
 }
