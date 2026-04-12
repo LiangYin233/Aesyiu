@@ -7,6 +7,7 @@ export interface ToolCall {
 }
 
 export interface Message {
+  id?: string;
   role: Role;
   content: string | null;
   tool_calls?: ToolCall[];

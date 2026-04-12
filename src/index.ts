@@ -1,5 +1,6 @@
 export type { Role, ToolCall, Message, TokenUsage, ModelDefinition, ProviderConfig, EngineResult, Tool } from './types/index.js';
 export { AgentContext } from './context/index.js';
+export type { MessageInput, MessagePatch } from './context/index.js';
 export { LLMProvider } from './provider/index.js';
 export { AnthropicProvider, ANTHROPIC_MODELS } from './provider/anthropic/index.js';
 export { OpenAIResponsesProvider, OPENAI_RESPONSES_MODELS } from './provider/openai-responses/index.js';
@@ -9,6 +10,6 @@ export { MCPManager, namespaceMCPToolName } from './mcp/index.js';
 export { loadSkill, loadSkills, renderSkillsPrompt, createLoadSkillTool, createSkillsPromptMessage } from './skill/index.js';
 export { ToolExecutor } from './tool/index.js';
 export { AesyiuEngine } from './engine/index.js';
-export type { Middleware } from './engine/index.js';
+export type { Middleware, RunOptions } from './engine/index.js';
 export type { MCPServerConfig } from './mcp/index.js';
 export type { AgentSkill, SkillMetadata, SkillMetadataScalar, SkillMetadataValue, SkillResourcePaths } from './skill/index.js';

@@ -35,9 +35,11 @@ export class MemoryManager {
 
     try {
       const summary = await this.compressMessages(ctx, compressible);
-      ctx.messages = [...pinned, summary, ...protectedLatest];
+      ctx.clearMessages();
+      ctx.addMessages([...pinned, summary, ...protectedLatest]);
     } catch {
-      ctx.messages = [...pinned, ...protectedLatest];
+      ctx.clearMessages();
+      ctx.addMessages([...pinned, ...protectedLatest]);
     }
   }
 
