@@ -1,0 +1,38 @@
+# Source files
+src/
+tsconfig.json
+
+# Development files
+*.test.ts
+*.spec.ts
+tests/
+__tests__/
+
+# Config files
+.eslintrc*
+eslint.config.*
+.prettierrc*
+.gitignore
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# Build artifacts (only dist should be published)
+# dist/ is NOT ignored - it's the main publish target

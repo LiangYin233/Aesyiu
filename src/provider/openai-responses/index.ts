@@ -11,13 +11,6 @@ export class OpenAIResponsesProvider extends LLMProvider {
   private client: OpenAI;
 
   constructor(config: ProviderConfig, models: ModelDefinition[]) {
-    try {
-      require('openai');
-    } catch {
-      throw new Error(
-        'openai is required for OpenAIResponsesProvider. Install it with: npm install openai',
-      );
-    }
     super('openai-responses', config, models);
 
     const clientConfig: OpenAIClientOptions = { apiKey: config.apiKey };

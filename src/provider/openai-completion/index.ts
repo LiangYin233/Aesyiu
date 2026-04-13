@@ -13,13 +13,6 @@ export class OpenAICompletionProvider extends LLMProvider {
   private client: OpenAI;
 
   constructor(config: ProviderConfig, models: ModelDefinition[]) {
-    try {
-      require('openai');
-    } catch {
-      throw new Error(
-        'openai is required for OpenAICompletionProvider. Install it with: npm install openai',
-      );
-    }
     super('openai-completion', config, models);
 
     const clientConfig: OpenAIClientOptions = { apiKey: config.apiKey };

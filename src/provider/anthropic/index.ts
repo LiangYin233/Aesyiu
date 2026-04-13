@@ -18,21 +18,13 @@ export class AnthropicProvider extends LLMProvider {
   private client: Anthropic;
 
   constructor(config: ProviderConfig, models: ModelDefinition[]) {
-    let AnthropicClient: typeof Anthropic;
-    try {
-      AnthropicClient = require('@anthropic-ai/sdk').default || require('@anthropic-ai/sdk');
-    } catch {
-      throw new Error(
-        '@anthropic-ai/sdk is required for AnthropicProvider. Install it with: npm install @anthropic-ai/sdk',
-      );
-    }
     super('anthropic', config, models);
 
     const clientConfig: AnthropicClientOptions = { apiKey: config.apiKey };
     if (config.baseURL) {
       clientConfig.baseURL = config.baseURL;
     }
-    this.client = new AnthropicClient(clientConfig);
+    this.client = new Anthropic(clientConfig);
   }
 
   private toSDKMessages(messages: Message[]): { system?: string | Anthropic.ContentBlockParam[]; messages: AnthropicMessageParam[] } {

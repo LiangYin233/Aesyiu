@@ -1,6 +1,13 @@
-import { ZodSchema } from 'zod';
+import { z } from 'zod';
 import type { AgentContext } from '../context/index.js';
 import type { Tool, ToolCall, Message } from '../types/index.js';
+
+function isZodSchema(obj: unknown): obj is z.ZodTypeAny {
+  return obj !== null &&
+    typeof obj === 'object' &&
+    'safeParse' in obj &&
+    typeof (obj as { safeParse: unknown }).safeParse === 'function';
+}
 
 export class ToolExecutor {
   public static async executeCalls(
@@ -40,7 +47,7 @@ export class ToolExecutor {
       };
     }
 
-    if (tool.parameters && tool.parameters instanceof ZodSchema) {
+    if (tool.parameters && isZodSchema(tool.parameters)) {
       const validationResult = tool.parameters.safeParse(parsedArgs);
       if (!validationResult.success) {
         return {
