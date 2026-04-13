@@ -1,4 +1,4 @@
-export type { Role, ToolCall, Message, TokenUsage, ModelDefinition, ProviderConfig, EngineResult, Tool } from './types/index.js';
+export type { Role, ToolCall, Message, TokenUsage, ModelDefinition, ProviderConfig, EngineErrorInfo, EngineErrorSource, EngineResult, Tool } from './types/index.js';
 export { AgentContext } from './context/index.js';
 export type { MessageInput, MessagePatch } from './context/index.js';
 export { LLMProvider } from './provider/index.js';

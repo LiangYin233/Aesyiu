@@ -39,10 +39,19 @@ export interface ProviderConfig {
 
 export type EngineResultStatus = 'completed' | 'max_steps_reached' | 'error';
 
+export type EngineErrorSource = 'provider' | 'memory' | 'tool' | 'engine' | 'unknown';
+
+export interface EngineErrorInfo {
+  message: string;
+  source: EngineErrorSource;
+  cause?: string;
+}
+
 export interface EngineResult {
   status: EngineResultStatus;
   messages: Message[];
   usage: TokenUsage;
+  error?: EngineErrorInfo;
 }
 
 export interface Tool {

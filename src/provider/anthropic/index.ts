@@ -14,6 +14,17 @@ type AnthropicToolResultBlockParam = Anthropic.ToolResultBlockParam;
 type AnthropicMessageParam = Anthropic.MessageParam;
 type AnthropicTool = Anthropic.Tool;
 
+function parseToolCallArguments(toolCall: { id: string; name: string; arguments: string }): unknown {
+  try {
+    return JSON.parse(toolCall.arguments);
+  } catch (error) {
+    throw new Error(
+      `Failed to parse assistant tool call arguments for "${toolCall.name}" (${toolCall.id})`,
+      { cause: error },
+    );
+  }
+}
+
 export class AnthropicProvider extends LLMProvider {
   private client: Anthropic;
 
@@ -60,7 +71,7 @@ export class AnthropicProvider extends LLMProvider {
               type: 'tool_use',
               id: tc.id,
               name: tc.name,
-              input: JSON.parse(tc.arguments),
+              input: parseToolCallArguments(tc),
             });
           }
           sdkMessages.push({ role: 'assistant', content: contentBlocks });

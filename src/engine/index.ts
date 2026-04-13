@@ -1,5 +1,5 @@
 import type { AgentContext } from '../context/index.js';
-import type { Message, Tool, EngineResult } from '../types/index.js';
+import type { Message, Tool, EngineErrorSource, EngineResult } from '../types/index.js';
 import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager } from '../memory/index.js';
 import { createLoadSkillTool, createSkillsPromptMessage, type AgentSkill } from '../skill/index.js';
@@ -46,6 +46,26 @@ function compose(middlewares: Middleware[], core: (ctx: AgentContext) => Promise
     await dispatch(0);
     return result!;
   };
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function isEngineErrorSource(value: unknown): value is EngineErrorSource {
+  return value === 'provider' || value === 'memory' || value === 'tool' || value === 'engine' || value === 'unknown';
+}
+
+function getErrorSource(error: unknown): EngineErrorSource | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+
+  return isEngineErrorSource(error.cause) ? error.cause : undefined;
 }
 
 export class AesyiuEngine {
@@ -145,31 +165,65 @@ export class AesyiuEngine {
 
       try {
         const outboundMessages = this.prepareOutboundMessages(ctx.getMessages());
-        const { message, usage } = await ctx.activeProvider.generate(
-          ctx.activeModel,
-          outboundMessages,
-          Array.from(availableTools.values()),
-        );
+        const { message, usage } = await this.runProvider(ctx, outboundMessages, availableTools);
         ctx.addMessage(message);
 
-        await this.memoryManager.checkAndOptimize(ctx, usage);
+        try {
+          await this.memoryManager.checkAndOptimize(ctx, usage);
+        } catch (error) {
+          return this.createErrorResult(ctx, error, 'memory');
+        }
 
         if (!message.tool_calls || message.tool_calls.length === 0) {
           return { status: 'completed', messages: ctx.messages, usage: ctx.sessionUsage };
         }
 
-        const toolResults = await ToolExecutor.executeCalls(
-          message.tool_calls,
-          availableTools,
-          ctx,
-        );
+        const toolResults = await this.runTools(message.tool_calls, availableTools, ctx);
         ctx.addMessages(toolResults);
-      } catch (err) {
-        return { status: 'error', messages: ctx.messages, usage: ctx.sessionUsage };
+      } catch (error) {
+        return this.createErrorResult(ctx, error, 'engine');
       }
     }
 
     return { status: 'max_steps_reached', messages: ctx.messages, usage: ctx.sessionUsage };
+  }
+
+  private async runProvider(ctx: AgentContext, messages: Message[], availableTools: Map<string, Tool>): Promise<{ message: Message; usage: EngineResult['usage'] }> {
+    try {
+      return await ctx.activeProvider.generate(
+        ctx.activeModel,
+        messages,
+        Array.from(availableTools.values()),
+      );
+    } catch (error) {
+      throw this.createDiagnosticError('provider', error);
+    }
+  }
+
+  private async runTools(toolCalls: Message['tool_calls'], availableTools: Map<string, Tool>, ctx: AgentContext) {
+    try {
+      return await ToolExecutor.executeCalls(toolCalls ?? [], availableTools, ctx);
+    } catch (error) {
+      throw this.createDiagnosticError('tool', error);
+    }
+  }
+
+  private createDiagnosticError(source: EngineErrorSource, error: unknown): Error {
+    return new Error(getErrorMessage(error), { cause: source });
+  }
+
+  private createErrorResult(ctx: AgentContext, error: unknown, fallbackSource: EngineErrorSource): EngineResult {
+    const source = getErrorSource(error) ?? fallbackSource;
+
+    return {
+      status: 'error',
+      messages: ctx.messages,
+      usage: ctx.sessionUsage,
+      error: {
+        message: getErrorMessage(error),
+        source,
+      },
+    };
   }
 
   private resolveRunTools(options?: RunOptions): Map<string, Tool> {

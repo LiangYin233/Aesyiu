@@ -7,6 +7,12 @@ export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o-mini', contextWindow: 128000, maxOutputTokens: 16384 },
 ];
 
+interface StreamedToolCallState {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
 export class OpenAIResponsesProvider extends LLMProvider {
   private client: OpenAI;
 
@@ -167,28 +173,46 @@ export class OpenAIResponsesProvider extends LLMProvider {
       const stream = await this.client.responses.create(mergeStream as OpenAI.Responses.ResponseCreateParamsStreaming);
 
       let content = '';
-      const toolCalls: { id: string; name: string; arguments: string }[] = [];
-      let currentCallArgs = '';
+      const toolCalls = new Map<number, StreamedToolCallState>();
       let finalUsage: TokenUsage | undefined;
 
       for await (const event of stream) {
         if (event.type === 'response.output_text.delta') {
-          content += (event as any).delta ?? '';
+          content += event.delta;
           yield { message: { role: 'assistant', content } };
         } else if (event.type === 'response.function_call_arguments.delta') {
-          currentCallArgs += (event as any).delta ?? '';
+          const current = toolCalls.get(event.output_index) ?? {
+            id: event.item_id,
+            name: '',
+            arguments: '',
+          };
+          current.arguments += event.delta;
+          toolCalls.set(event.output_index, current);
+        } else if (event.type === 'response.function_call_arguments.done') {
+          const current = toolCalls.get(event.output_index) ?? {
+            id: event.item_id,
+            name: event.name,
+            arguments: '',
+          };
+          current.id = event.item_id;
+          current.name = event.name;
+          current.arguments = event.arguments;
+          toolCalls.set(event.output_index, current);
         } else if (event.type === 'response.output_item.done') {
-          const item = (event as any).item;
+          const item = event.item;
           if (item?.type === 'function_call') {
-            toolCalls.push({
+            const current = toolCalls.get(event.output_index) ?? {
               id: item.call_id ?? '',
               name: item.name ?? '',
-              arguments: currentCallArgs || item.arguments || '{}',
-            });
-            currentCallArgs = '';
+              arguments: '',
+            };
+            current.id = item.call_id ?? current.id;
+            current.name = item.name ?? current.name;
+            current.arguments = current.arguments || item.arguments || '{}';
+            toolCalls.set(event.output_index, current);
           }
         } else if (event.type === 'response.completed') {
-          const resp = (event as any).response;
+          const resp = event.response;
           if (resp?.usage) {
             finalUsage = {
               promptTokens: resp.usage.input_tokens ?? 0,
@@ -199,10 +223,14 @@ export class OpenAIResponsesProvider extends LLMProvider {
         }
       }
 
+      const finalToolCalls = Array.from(toolCalls.entries())
+        .sort(([left], [right]) => left - right)
+        .map(([, toolCall]) => toolCall);
+
       const finalMessage: Message = {
         role: 'assistant',
         content: content || null,
-        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        ...(finalToolCalls.length > 0 ? { tool_calls: finalToolCalls } : {}),
       };
       yield { message: finalMessage, usage: finalUsage };
     } catch (error) {

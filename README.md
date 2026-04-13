@@ -31,7 +31,11 @@ const result = await engine.run(
   ctx
 );
 
-console.log(result.messages.at(-1)?.content);
+if (result.status === 'error') {
+  console.error(result.error?.source, result.error?.message);
+} else {
+  console.log(result.messages.at(-1)?.content);
+}
 ```
 
 ## 核心概念
@@ -103,6 +107,7 @@ const result = await engine.run(input, ctx);
 // result.status: 'completed' | 'max_steps_reached' | 'error'
 // result.messages: 完整对话历史
 // result.usage: Token 使用量
+// result.error?: 失败时的结构化诊断信息
 ```
 
 ## 进阶用法
@@ -120,19 +125,6 @@ engine.use(async (ctx, next) => {
 ```
 
 ### Skill 系统
-
-基于 Markdown 的模块化技能管理：
-
-创建 `skills/code-reviewer/SKILL.md`：
-
-```markdown
----
-name: code-reviewer
-description: 代码审查
----
-
-你是代码审查专家，检查代码中的 bug 和性能问题。
-```
 
 加载并使用：
 
@@ -152,5 +144,5 @@ await engine.run(input, ctx, { skills: ['code-reviewer'] });
 |-----|------|
 | `Message` | `{ role, content, tool_calls?, tool_call_id? }` |
 | `Tool` | `{ name, description, parameters, execute }` |
-| `EngineResult` | `{ status, messages, usage }` |
+| `EngineResult` | `{ status, messages, usage, error? }` |
 | `Middleware` | `(ctx, next) => Promise<void>` |
