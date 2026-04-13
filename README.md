@@ -1,6 +1,15 @@
-# Aesyiu
+<h1 align="center">Aesyiu</h1>
 
-无状态、高并发的 AI Agent 框架，支持洋葱模型中间件、动态 LLM 切换、Skill 系统和 MCP 集成。
+<p align="center"><strong>Aesyiu As you wish</strong></p>
+
+<p align="center">
+  <img src="https://img.shields.io/npm/v/aesyiu" alt="npm version" />
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" />
+  <img src="https://img.shields.io/badge/Skills-Support-7C3AED" alt="Skill System" />
+  <img src="https://img.shields.io/badge/MCP-Support-0A7EA4" alt="MCP Ready" />
+</p>
+
+<p align="center">无状态、高并发的 AI Agent 框架，支持洋葱模型中间件、动态 LLM 切换、Skill 系统和 MCP 集成。</p>
 
 ## 安装
 

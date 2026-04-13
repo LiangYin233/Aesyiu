@@ -1,7 +1,8 @@
 {
   "name": "aesyiu",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Stateless, high-concurrency AI Agent framework with onion-model middleware and dynamic LLM switching",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
