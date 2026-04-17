@@ -2,9 +2,16 @@ import type { AgentContext } from '../context/index.js';
 import type { Message, TokenUsage } from '../types/index.js';
 
 export interface MemoryManagerConfig {
-  compressThresholdRatio: number;
-  retainLatestMessages: number;
+  compressThresholdRatio?: number;
+  retainLatestMessages?: number;
 }
+
+export type MemoryLLMFn = (messages: Message[]) => Promise<{ message: Message; usage: TokenUsage }>;
+
+const DEFAULTS: Required<MemoryManagerConfig> = {
+  compressThresholdRatio: 0.8,
+  retainLatestMessages: 5,
+};
 
 interface MessagePartition {
   pinned: Message[];
@@ -13,13 +20,21 @@ interface MessagePartition {
 }
 
 export class MemoryManager {
-  private config: MemoryManagerConfig;
+  private config: Required<MemoryManagerConfig>;
 
-  constructor(config: MemoryManagerConfig) {
-    this.config = config;
+  constructor(config?: MemoryManagerConfig) {
+    this.config = { ...DEFAULTS, ...config };
   }
 
-  public async checkAndOptimize(ctx: AgentContext, currentApiUsage: TokenUsage): Promise<void> {
+  public static default(): MemoryManager {
+    return new MemoryManager();
+  }
+
+  public async checkAndOptimize(
+    ctx: AgentContext,
+    currentApiUsage: TokenUsage,
+    llm?: MemoryLLMFn,
+  ): Promise<void> {
     ctx.accumulateUsage(currentApiUsage);
 
     const threshold = ctx.activeModel.contextWindow * this.config.compressThresholdRatio;
@@ -34,38 +49,34 @@ export class MemoryManager {
     }
 
     try {
-      const summary = await this.compressMessages(ctx, compressible);
-      ctx.clearMessages();
-      ctx.addMessages([...pinned, summary, ...protectedLatest]);
-    } catch {
-      ctx.clearMessages();
-      ctx.addMessages([...pinned, ...protectedLatest]);
+      const summary = await this.compressMessages(ctx, compressible, llm);
+      ctx.replaceMessages([...pinned, summary, ...protectedLatest]);
+    } catch (error) {
+      console.warn('[aesyiu] memory compression failed; dropping compressible history', error);
+      ctx.replaceMessages([...pinned, ...protectedLatest]);
     }
   }
 
-  private partitionMessages(messages: Message[]): MessagePartition {
-    const pinned: Message[] = [];
-    const nonPinned: Message[] = [];
-
-    for (const msg of messages) {
-      if (msg._meta?.isPinned) {
-        pinned.push(msg);
-      } else {
-        nonPinned.push(msg);
-      }
-    }
+  private partitionMessages(messages: readonly Message[]): MessagePartition {
+    const grouped = Object.groupBy(messages, (message) =>
+      message._meta?.isPinned ? 'pinned' : 'rest',
+    ) as { pinned?: Message[]; rest?: Message[] };
+    const pinned = [...(grouped.pinned ?? [])];
+    const rest = [...(grouped.rest ?? [])];
 
     const retainCount = this.config.retainLatestMessages;
-    const protectedLatest = nonPinned.length > retainCount
-      ? nonPinned.splice(-retainCount)
-      : nonPinned.splice(0);
+    const protectedLatest = rest.length > retainCount
+      ? rest.splice(-retainCount)
+      : rest.splice(0);
 
-    const compressible = nonPinned;
-
-    return { pinned, compressible, protectedLatest };
+    return { pinned, compressible: rest, protectedLatest };
   }
 
-  private async compressMessages(ctx: AgentContext, messages: Message[]): Promise<Message> {
+  private async compressMessages(
+    ctx: AgentContext,
+    messages: Message[],
+    llm: MemoryLLMFn | undefined,
+  ): Promise<Message> {
     const conversationSummary = messages
       .map((m) => `${m.role}: ${m.content ?? (m.tool_calls ? JSON.stringify(m.tool_calls) : '')}`)
       .join('\n');
@@ -75,7 +86,8 @@ export class MemoryManager {
       content: `Please summarize the following conversation history, preserving key information and context:\n\n${conversationSummary}`,
     };
 
-    const { message } = await ctx.activeProvider.generate(ctx.activeModel, [summaryPrompt]);
+    const fn = llm ?? (async (msgs) => ctx.activeProvider.generate(ctx.activeModel, msgs));
+    const { message } = await fn([summaryPrompt]);
 
     return {
       role: 'system',

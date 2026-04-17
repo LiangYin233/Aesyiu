@@ -1,6 +1,6 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage } from '../../types/index.js';
-import { LLMProvider } from '../index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
+import { LLMProvider, type GenerateOptions } from '../index.js';
 
 export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o', contextWindow: 128000, maxOutputTokens: 16384 },
@@ -130,111 +130,114 @@ export class OpenAIResponsesProvider extends LLMProvider {
   }
 
   public async generate(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
+    options?: GenerateOptions,
   ): Promise<{ message: Message; usage: TokenUsage }> {
-    try {
-      const input = this.toSDKInput(messages);
-      const params: Record<string, any> = {
-        model: modelDef.id,
-        input,
-      };
-      const sdkTools = this.toSDKTools(tools);
-      if (sdkTools) {
-        params.tools = sdkTools;
-      }
-      const merged = this.mergeExtraBody(params, modelDef.extraBody);
-      const response = await this.client.responses.create(merged as OpenAI.Responses.ResponseCreateParamsNonStreaming);
-      return this.fromSDKResponse(response);
-    } catch (error) {
-      throw error;
+    const modelDef = this.resolveModel(model);
+    const input = this.toSDKInput(messages);
+    const params: Record<string, any> = {
+      model: modelDef.id,
+      input,
+    };
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
     }
+    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const response = await this.client.responses.create(
+      merged as OpenAI.Responses.ResponseCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    return this.fromSDKResponse(response);
   }
 
   public async *generateStream(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
-  ): AsyncGenerator<{ message: Partial<Message>; usage?: TokenUsage }> {
-    try {
-      const input = this.toSDKInput(messages);
-      const params: Record<string, any> = {
-        model: modelDef.id,
-        input,
-      };
-      const sdkTools = this.toSDKTools(tools);
-      if (sdkTools) {
-        params.tools = sdkTools;
-      }
-      const merged = this.mergeExtraBody(params, modelDef.extraBody);
-      const mergeStream = this.mergeExtraBody({ ...merged, stream: true }, modelDef.extraBody);
+    options?: GenerateOptions,
+  ): AsyncGenerator<StreamChunk, void> {
+    const modelDef = this.resolveModel(model);
+    const input = this.toSDKInput(messages);
+    const params: Record<string, any> = {
+      model: modelDef.id,
+      input,
+      stream: true,
+    };
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    const merged = this.mergeExtraBody(params, modelDef.extraBody);
 
-      const stream = await this.client.responses.create(mergeStream as OpenAI.Responses.ResponseCreateParamsStreaming);
+    const stream = await this.client.responses.create(
+      merged as OpenAI.Responses.ResponseCreateParamsStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
 
-      let content = '';
-      const toolCalls = new Map<number, StreamedToolCallState>();
-      let finalUsage: TokenUsage | undefined;
+    let content = '';
+    const toolCalls = new Map<number, StreamedToolCallState>();
+    let finalUsage: TokenUsage | undefined;
 
-      for await (const event of stream) {
-        if (event.type === 'response.output_text.delta') {
-          content += event.delta;
-          yield { message: { role: 'assistant', content } };
-        } else if (event.type === 'response.function_call_arguments.delta') {
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        content += event.delta;
+        yield { message: { role: 'assistant', content }, delta: event.delta };
+      } else if (event.type === 'response.function_call_arguments.delta') {
+        const current = toolCalls.get(event.output_index) ?? {
+          id: event.item_id,
+          name: '',
+          arguments: '',
+        };
+        current.arguments += event.delta;
+        toolCalls.set(event.output_index, current);
+      } else if (event.type === 'response.function_call_arguments.done') {
+        const current = toolCalls.get(event.output_index) ?? {
+          id: event.item_id,
+          name: event.name,
+          arguments: '',
+        };
+        current.id = event.item_id;
+        current.name = event.name;
+        current.arguments = event.arguments;
+        toolCalls.set(event.output_index, current);
+      } else if (event.type === 'response.output_item.done') {
+        const item = event.item;
+        if (item?.type === 'function_call') {
           const current = toolCalls.get(event.output_index) ?? {
-            id: event.item_id,
-            name: '',
+            id: item.call_id ?? '',
+            name: item.name ?? '',
             arguments: '',
           };
-          current.arguments += event.delta;
+          current.id = item.call_id ?? current.id;
+          current.name = item.name ?? current.name;
+          current.arguments = current.arguments || item.arguments || '{}';
           toolCalls.set(event.output_index, current);
-        } else if (event.type === 'response.function_call_arguments.done') {
-          const current = toolCalls.get(event.output_index) ?? {
-            id: event.item_id,
-            name: event.name,
-            arguments: '',
+        }
+      } else if (event.type === 'response.completed') {
+        const resp = event.response;
+        if (resp?.usage) {
+          finalUsage = {
+            promptTokens: resp.usage.input_tokens ?? 0,
+            completionTokens: resp.usage.output_tokens ?? 0,
+            totalTokens: (resp.usage.input_tokens ?? 0) + (resp.usage.output_tokens ?? 0),
           };
-          current.id = event.item_id;
-          current.name = event.name;
-          current.arguments = event.arguments;
-          toolCalls.set(event.output_index, current);
-        } else if (event.type === 'response.output_item.done') {
-          const item = event.item;
-          if (item?.type === 'function_call') {
-            const current = toolCalls.get(event.output_index) ?? {
-              id: item.call_id ?? '',
-              name: item.name ?? '',
-              arguments: '',
-            };
-            current.id = item.call_id ?? current.id;
-            current.name = item.name ?? current.name;
-            current.arguments = current.arguments || item.arguments || '{}';
-            toolCalls.set(event.output_index, current);
-          }
-        } else if (event.type === 'response.completed') {
-          const resp = event.response;
-          if (resp?.usage) {
-            finalUsage = {
-              promptTokens: resp.usage.input_tokens ?? 0,
-              completionTokens: resp.usage.output_tokens ?? 0,
-              totalTokens: (resp.usage.input_tokens ?? 0) + (resp.usage.output_tokens ?? 0),
-            };
-          }
         }
       }
-
-      const finalToolCalls = Array.from(toolCalls.entries())
-        .sort(([left], [right]) => left - right)
-        .map(([, toolCall]) => toolCall);
-
-      const finalMessage: Message = {
-        role: 'assistant',
-        content: content || null,
-        ...(finalToolCalls.length > 0 ? { tool_calls: finalToolCalls } : {}),
-      };
-      yield { message: finalMessage, usage: finalUsage };
-    } catch (error) {
-      throw error;
     }
+
+    const finalToolCalls = toolCalls.entries()
+      .toArray()
+      .sort(([left], [right]) => left - right)
+      .map(([, toolCall]) => toolCall);
+
+    const finalMessage: Message = {
+      role: 'assistant',
+      content: content || null,
+      ...(finalToolCalls.length > 0 ? { tool_calls: finalToolCalls } : {}),
+    };
+    yield { message: finalMessage, usage: finalUsage };
   }
 }

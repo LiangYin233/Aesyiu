@@ -1,11 +1,13 @@
 import Anthropic, { type ClientOptions as AnthropicClientOptions } from '@anthropic-ai/sdk';
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage } from '../../types/index.js';
-import { LLMProvider } from '../index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
+import { LLMProvider, type GenerateOptions } from '../index.js';
 
 export const ANTHROPIC_MODELS: ModelDefinition[] = [
+  { id: 'claude-opus-4-7', contextWindow: 200000, maxOutputTokens: 32000 },
+  { id: 'claude-sonnet-4-6', contextWindow: 1000000, maxOutputTokens: 64000 },
+  { id: 'claude-haiku-4-5-20251001', contextWindow: 200000, maxOutputTokens: 16000 },
   { id: 'claude-3-5-sonnet-20241022', contextWindow: 200000, maxOutputTokens: 8192 },
   { id: 'claude-3-5-haiku-20241022', contextWindow: 200000, maxOutputTokens: 8192 },
-  { id: 'claude-3-opus-20240229', contextWindow: 200000, maxOutputTokens: 4096 },
 ];
 
 type AnthropicContentBlock = Anthropic.ContentBlockParam;
@@ -138,108 +140,111 @@ export class AnthropicProvider extends LLMProvider {
   }
 
   public async generate(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
+    options?: GenerateOptions,
   ): Promise<{ message: Message; usage: TokenUsage }> {
-    try {
-      const { system, messages: sdkMessages } = this.toSDKMessages(messages);
-      const params: Record<string, any> = {
-        model: modelDef.id,
-        max_tokens: modelDef.maxOutputTokens,
-        messages: sdkMessages,
-      };
-      if (system) {
-        params.system = system;
-      }
-      const sdkTools = this.toSDKTools(tools);
-      if (sdkTools) {
-        params.tools = sdkTools;
-      }
-      const merged = this.mergeExtraBody(params, modelDef.extraBody);
-      const response = await this.client.messages.create(merged as Anthropic.MessageCreateParamsNonStreaming);
-      return this.fromSDKResponse(response);
-    } catch (error) {
-      throw error;
+    const modelDef = this.resolveModel(model);
+    const { system, messages: sdkMessages } = this.toSDKMessages(messages);
+    const params: Record<string, any> = {
+      model: modelDef.id,
+      max_tokens: modelDef.maxOutputTokens,
+      messages: sdkMessages,
+    };
+    if (system) {
+      params.system = system;
     }
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const response = await this.client.messages.create(
+      merged as Anthropic.MessageCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    return this.fromSDKResponse(response);
   }
 
   public async *generateStream(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
-  ): AsyncGenerator<{ message: Partial<Message>; usage?: TokenUsage }> {
-    try {
-      const { system, messages: sdkMessages } = this.toSDKMessages(messages);
-      const params: Record<string, any> = {
-        model: modelDef.id,
-        max_tokens: modelDef.maxOutputTokens,
-        messages: sdkMessages,
-      };
-      if (system) {
-        params.system = system;
-      }
-      const sdkTools = this.toSDKTools(tools);
-      if (sdkTools) {
-        params.tools = sdkTools;
-      }
-      const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    options?: GenerateOptions,
+  ): AsyncGenerator<StreamChunk, void> {
+    const modelDef = this.resolveModel(model);
+    const { system, messages: sdkMessages } = this.toSDKMessages(messages);
+    const params: Record<string, any> = {
+      model: modelDef.id,
+      max_tokens: modelDef.maxOutputTokens,
+      messages: sdkMessages,
+    };
+    if (system) {
+      params.system = system;
+    }
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    const merged = this.mergeExtraBody(params, modelDef.extraBody);
 
-      const stream = this.client.messages.stream(merged as Anthropic.MessageCreateParamsNonStreaming);
+    const stream = this.client.messages.stream(
+      merged as Anthropic.MessageCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
 
-      let content = '';
-      const toolCalls: { id: string; name: string; arguments: string }[] = [];
-      let currentToolId = '';
-      let currentToolName = '';
-      let currentToolInput = '';
-      let finalUsage: TokenUsage | undefined;
+    let content = '';
+    const toolCalls: { id: string; name: string; arguments: string }[] = [];
+    let currentToolId = '';
+    let currentToolName = '';
+    let currentToolInput = '';
+    let finalUsage: TokenUsage | undefined;
 
-      for await (const event of stream) {
-        if (event.type === 'content_block_start') {
-          if (event.content_block.type === 'tool_use') {
-            currentToolId = event.content_block.id;
-            currentToolName = event.content_block.name;
-            currentToolInput = '';
-          }
-        } else if (event.type === 'content_block_delta') {
-          if (event.delta.type === 'text_delta') {
-            content += event.delta.text;
-            yield {
-              message: { role: 'assistant', content: content },
-            };
-          } else if (event.delta.type === 'input_json_delta') {
-            currentToolInput += event.delta.partial_json;
-          }
-        } else if (event.type === 'content_block_stop') {
-          if (currentToolId) {
-            toolCalls.push({
-              id: currentToolId,
-              name: currentToolName,
-              arguments: currentToolInput || '{}',
-            });
-            currentToolId = '';
-            currentToolName = '';
-            currentToolInput = '';
-          }
-        } else if (event.type === 'message_delta') {
-          if (event.usage) {
-            finalUsage = {
-              promptTokens: event.usage.input_tokens ?? 0,
-              completionTokens: event.usage.output_tokens ?? 0,
-              totalTokens: (event.usage.input_tokens ?? 0) + (event.usage.output_tokens ?? 0),
-            };
-          }
+    for await (const event of stream) {
+      if (event.type === 'content_block_start') {
+        if (event.content_block.type === 'tool_use') {
+          currentToolId = event.content_block.id;
+          currentToolName = event.content_block.name;
+          currentToolInput = '';
+        }
+      } else if (event.type === 'content_block_delta') {
+        if (event.delta.type === 'text_delta') {
+          content += event.delta.text;
+          yield {
+            message: { role: 'assistant', content },
+            delta: event.delta.text,
+          };
+        } else if (event.delta.type === 'input_json_delta') {
+          currentToolInput += event.delta.partial_json;
+        }
+      } else if (event.type === 'content_block_stop') {
+        if (currentToolId) {
+          toolCalls.push({
+            id: currentToolId,
+            name: currentToolName,
+            arguments: currentToolInput || '{}',
+          });
+          currentToolId = '';
+          currentToolName = '';
+          currentToolInput = '';
+        }
+      } else if (event.type === 'message_delta') {
+        if (event.usage) {
+          finalUsage = {
+            promptTokens: event.usage.input_tokens ?? 0,
+            completionTokens: event.usage.output_tokens ?? 0,
+            totalTokens: (event.usage.input_tokens ?? 0) + (event.usage.output_tokens ?? 0),
+          };
         }
       }
-
-      const finalMessage: Message = {
-        role: 'assistant',
-        content: content || null,
-        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-      };
-      yield { message: finalMessage, usage: finalUsage };
-    } catch (error) {
-      throw error;
     }
+
+    const finalMessage: Message = {
+      role: 'assistant',
+      content: content || null,
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    };
+    yield { message: finalMessage, usage: finalUsage };
   }
 }

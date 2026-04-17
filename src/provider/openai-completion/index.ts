@@ -1,7 +1,7 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions';
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage } from '../../types/index.js';
-import { LLMProvider } from '../index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
+import { LLMProvider, type GenerateOptions } from '../index.js';
 
 export const OPENAI_COMPLETION_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o', contextWindow: 128000, maxOutputTokens: 16384 },
@@ -83,11 +83,13 @@ export class OpenAICompletionProvider extends LLMProvider {
     const choice = response.choices[0];
     const msg = choice?.message;
 
-    const toolCalls = msg?.tool_calls?.map((tc) => ({
-      id: tc.id,
-      name: ('function' in tc ? tc.function.name : ''),
-      arguments: ('function' in tc ? tc.function.arguments : ''),
-    }));
+    const toolCalls = msg?.tool_calls
+      ?.filter((tc): tc is Extract<typeof tc, { type: 'function' }> => 'function' in tc)
+      .map((tc) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      }));
 
     const message: Message = {
       role: 'assistant',
@@ -105,97 +107,99 @@ export class OpenAICompletionProvider extends LLMProvider {
   }
 
   public async generate(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
+    options?: GenerateOptions,
   ): Promise<{ message: Message; usage: TokenUsage }> {
-    try {
-      const sdkMessages = this.toSDKMessages(messages);
-      const params: Record<string, any> = {
-        model: modelDef.id,
-        messages: sdkMessages,
-      };
-      const sdkTools = this.toSDKTools(tools);
-      if (sdkTools) {
-        params.tools = sdkTools;
-      }
-      const merged = this.mergeExtraBody(params, modelDef.extraBody);
-      const response = await this.client.chat.completions.create(merged as OpenAI.ChatCompletionCreateParamsNonStreaming);
-      return this.fromSDKResponse(response);
-    } catch (error) {
-      throw error;
+    const modelDef = this.resolveModel(model);
+    const sdkMessages = this.toSDKMessages(messages);
+    const params: Record<string, any> = {
+      model: modelDef.id,
+      messages: sdkMessages,
+    };
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
     }
+    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const response = await this.client.chat.completions.create(
+      merged as OpenAI.ChatCompletionCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    return this.fromSDKResponse(response);
   }
 
   public async *generateStream(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
-  ): AsyncGenerator<{ message: Partial<Message>; usage?: TokenUsage }> {
-    try {
-      const sdkMessages = this.toSDKMessages(messages);
-      const params: Record<string, any> = {
-        model: modelDef.id,
-        messages: sdkMessages,
-        stream: true,
-        stream_options: { include_usage: true },
-      };
-      const sdkTools = this.toSDKTools(tools);
-      if (sdkTools) {
-        params.tools = sdkTools;
+    options?: GenerateOptions,
+  ): AsyncGenerator<StreamChunk, void> {
+    const modelDef = this.resolveModel(model);
+    const sdkMessages = this.toSDKMessages(messages);
+    const params: Record<string, any> = {
+      model: modelDef.id,
+      messages: sdkMessages,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+
+    const stream = await this.client.chat.completions.create(
+      merged as OpenAI.ChatCompletionCreateParamsStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+
+    let content = '';
+    const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
+    let finalUsage: TokenUsage | undefined;
+
+    for await (const chunk of stream) {
+      if (chunk.usage) {
+        finalUsage = {
+          promptTokens: chunk.usage.prompt_tokens ?? 0,
+          completionTokens: chunk.usage.completion_tokens ?? 0,
+          totalTokens: chunk.usage.total_tokens ?? 0,
+        };
       }
-      const merged = this.mergeExtraBody(params, modelDef.extraBody);
 
-      const stream = await this.client.chat.completions.create(merged as OpenAI.ChatCompletionCreateParamsStreaming);
+      const delta = chunk.choices[0]?.delta;
+      if (!delta) continue;
 
-      let content = '';
-      const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
-      let finalUsage: TokenUsage | undefined;
+      if (delta.content) {
+        content += delta.content;
+        yield { message: { role: 'assistant', content }, delta: delta.content };
+      }
 
-      for await (const chunk of stream) {
-        if (chunk.usage) {
-          finalUsage = {
-            promptTokens: chunk.usage.prompt_tokens ?? 0,
-            completionTokens: chunk.usage.completion_tokens ?? 0,
-            totalTokens: chunk.usage.total_tokens ?? 0,
-          };
-        }
-
-        const delta = chunk.choices[0]?.delta;
-        if (!delta) continue;
-
-        if (delta.content) {
-          content += delta.content;
-          yield { message: { role: 'assistant', content } };
-        }
-
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const existing = toolCalls.get(tc.index);
-            if (!existing) {
-              toolCalls.set(tc.index, {
-                id: tc.id ?? '',
-                name: tc.function?.name ?? '',
-                arguments: tc.function?.arguments ?? '',
-              });
-            } else {
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name = tc.function.name;
-              if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-            }
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const existing = toolCalls.get(tc.index);
+          if (!existing) {
+            toolCalls.set(tc.index, {
+              id: tc.id ?? '',
+              name: tc.function?.name ?? '',
+              arguments: tc.function?.arguments ?? '',
+            });
+          } else {
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
           }
         }
       }
-
-      const tcArray = Array.from(toolCalls.values());
-      const finalMessage: Message = {
-        role: 'assistant',
-        content: content || null,
-        ...(tcArray.length > 0 ? { tool_calls: tcArray } : {}),
-      };
-      yield { message: finalMessage, usage: finalUsage };
-    } catch (error) {
-      throw error;
     }
+
+    const tcArray = toolCalls.values().toArray();
+    const finalMessage: Message = {
+      role: 'assistant',
+      content: content || null,
+      ...(tcArray.length > 0 ? { tool_calls: tcArray } : {}),
+    };
+    yield { message: finalMessage, usage: finalUsage };
   }
 }

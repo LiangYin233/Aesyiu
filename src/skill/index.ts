@@ -329,6 +329,8 @@ export function createSkillsPromptMessage(skills: readonly AgentSkill[]): Messag
     _meta: {
       isPinned: true,
       skillPrompt: true,
+      internal: true,
+      promptSection: 'aesyiu:skills',
     },
   };
 }
@@ -342,7 +344,8 @@ export function createLoadSkillTool(skills: readonly AgentSkill[]): Tool {
     parameters: z.object({
       name: z.string().min(1).describe('The skill name to load.'),
     }),
-    execute: async ({ name }) => {
+    execute: async (args: unknown) => {
+      const { name } = args as { name: string };
       const skill = skillIndex.get(name);
 
       if (!skill) {

@@ -5,7 +5,7 @@ import type { Tool } from '../types/index.js';
 
 const AESYIU_CLIENT_INFO = {
   name: 'aesyiu',
-  version: '0.1.0',
+  version: '0.2.0',
 };
 
 type RegisteredMCPServer = {
@@ -15,6 +15,13 @@ type RegisteredMCPServer = {
 
 export interface MCPServerConfig extends Pick<StdioServerParameters, 'args' | 'command' | 'cwd' | 'env' | 'stderr'> {
   name: string;
+}
+
+export interface MCPServerStatus {
+  name: string;
+  /** True if this server is currently registered with the manager. The child process could still be dead; connection health is not actively probed. */
+  registered: boolean;
+  toolNames: string[];
 }
 
 export function namespaceMCPToolName(serverName: string, toolName: string): string {
@@ -127,13 +134,46 @@ export class MCPManager {
     return tools;
   }
 
+  public async unregisterServer(name: string): Promise<string[]> {
+    const server = this.servers.get(name);
+    if (!server) {
+      return [];
+    }
+
+    this.servers.delete(name);
+    await this.safeClose(server.client);
+    return [...server.tools];
+  }
+
+  public isRegistered(name: string): boolean {
+    return this.servers.has(name);
+  }
+
+  public getServer(name: string): MCPServerStatus | undefined {
+    const server = this.servers.get(name);
+    if (!server) return undefined;
+    return { name, registered: true, toolNames: [...server.tools] };
+  }
+
+  public listServers(): MCPServerStatus[] {
+    return this.servers.entries().map(([name, server]) => ({
+      name,
+      registered: true,
+      toolNames: [...server.tools],
+    })).toArray();
+  }
+
   public async dispose(): Promise<void> {
-    const servers = Array.from(this.servers.values());
+    const servers = this.servers.values().toArray();
     this.servers.clear();
 
     await Promise.all(servers.map(async (server) => {
       await this.safeClose(server.client);
     }));
+  }
+
+  public async [Symbol.asyncDispose](): Promise<void> {
+    await this.dispose();
   }
 
   private wrapTool(serverName: string, tool: MCPTool, client: Client): Tool {

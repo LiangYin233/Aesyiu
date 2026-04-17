@@ -1,4 +1,8 @@
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage } from '../types/index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../types/index.js';
+
+export interface GenerateOptions {
+  signal?: AbortSignal;
+}
 
 export abstract class LLMProvider {
   public readonly name: string;
@@ -22,20 +26,33 @@ export abstract class LLMProvider {
     return model;
   }
 
+  public registerModel(model: ModelDefinition): void {
+    this.supportedModels.set(model.id, model);
+  }
+
+  protected resolveModel(model: ModelDefinition | string): ModelDefinition {
+    return typeof model === 'string' ? this.getModel(model) : model;
+  }
+
   public abstract generate(
-    modelDef: ModelDefinition,
+    model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
+    options?: GenerateOptions,
   ): Promise<{ message: Message; usage: TokenUsage }>;
 
-  public abstract generateStream(...args: any[]): AsyncGenerator<any>;
+  public abstract generateStream(
+    model: ModelDefinition | string,
+    messages: Message[],
+    tools?: Tool[],
+    options?: GenerateOptions,
+  ): AsyncGenerator<StreamChunk, void>;
 
   protected mergeExtraBody(
     baseParams: Record<string, any>,
-    extraBody?: Record<string, any>,
+    extraBody?: Record<string, unknown>,
   ): Record<string, any> {
     if (!extraBody) return baseParams;
-    const merged = { ...extraBody, ...baseParams };
-    return merged;
+    return { ...extraBody, ...baseParams };
   }
 }
