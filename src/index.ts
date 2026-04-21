@@ -30,8 +30,7 @@ export { MCPManager, namespaceMCPToolName } from './mcp/index.js';
 export type { MCPServerConfig, MCPServerStatus } from './mcp/index.js';
 export { loadSkill, loadSkills, renderSkillsPrompt, createLoadSkillTool } from './skill/index.js';
 export type { AgentSkill, SkillMetadata, SkillMetadataScalar, SkillMetadataValue, SkillResourcePaths } from './skill/index.js';
-export { defineTool } from './tool/index.js';
-export type { DefineToolConfig } from './tool/index.js';
+
 export { AesyiuProgrammingError, isProgrammingError } from './error/index.js';
 export { AesyiuEngine, isAbortError } from './engine/index.js';
 export type {
