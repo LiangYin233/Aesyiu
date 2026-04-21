@@ -110,7 +110,7 @@ async function readOptionalResourcePaths(rootPath: string): Promise<SkillResourc
 
   for (const directoryName of OPTIONAL_RESOURCE_DIRS) {
     const candidatePath = path.join(rootPath, directoryName);
-    if (!(await statIfExists(candidatePath))?.isDirectory()) continue;
+    if (!(await statIfExists(candidatePath))?.isDirectory()) {continue;}
     resourcePaths[directoryName] = await resolveSafeExistingPath(rootPath, candidatePath);
   }
 
@@ -206,7 +206,7 @@ export async function loadSkills(rootDirectoryPath: string): Promise<AgentSkill[
   for (const directoryName of skillDirectories) {
     const candidatePath = path.join(resolvedRootDirectoryPath, directoryName);
     const candidateEntryPath = path.join(candidatePath, SKILL_FILE_NAME);
-    if (!(await statIfExists(candidateEntryPath))?.isFile()) continue;
+    if (!(await statIfExists(candidateEntryPath))?.isFile()) {continue;}
     discoveredSkills.push(await loadSkill(candidatePath));
   }
 

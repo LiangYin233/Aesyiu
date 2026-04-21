@@ -37,8 +37,8 @@ export function encodeToolResultEnvelope<T>(envelope: ToolResultEnvelope<T>): st
 const warnedTools = new WeakSet<object>();
 
 export function warnIfJSONSchemaTool(tool: Tool): void {
-  if (!tool.parameters || isZodSchema(tool.parameters)) return;
-  if (warnedTools.has(tool)) return;
+  if (!tool.parameters || isZodSchema(tool.parameters)) {return;}
+  if (warnedTools.has(tool)) {return;}
   warnedTools.add(tool);
   console.warn(
     `[aesyiu] tool "${tool.name}" uses a JSON schema; arguments pass through unvalidated. ` +

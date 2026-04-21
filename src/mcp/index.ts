@@ -159,7 +159,7 @@ export class MCPManager {
 
   public getServer(name: string): MCPServerStatus | undefined {
     const server = this.servers.get(name);
-    if (!server) return undefined;
+    if (!server) {return undefined;}
     return this.toServerStatus(name, server);
   }
 

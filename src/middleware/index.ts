@@ -15,7 +15,7 @@ export function loggingMiddleware(options?: LoggingMiddlewareOptions): LLMMiddle
   const log = options?.log ?? ((event) => console.log('[aesyiu:llm]', event));
   const label = options?.label ?? 'llm';
 
-  return async (ctx, next) => {
+  return async function loggingLLMMiddleware(ctx, next) {
     const start = Date.now();
     log({ phase: 'request', label, model: ctx.model.id, messageCount: ctx.messages.length, toolCount: ctx.tools.length });
     try {
@@ -47,8 +47,8 @@ const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RETRYABLE_ERROR_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNREFUSED']);
 
 function defaultShouldRetry(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (error.name === 'AbortError') return false;
+  if (!(error instanceof Error)) {return false;}
+  if (error.name === 'AbortError') {return false;}
 
   const statusLike = (error as { status?: unknown }).status ?? (error as { statusCode?: unknown }).statusCode;
   if (typeof statusLike === 'number' && RETRYABLE_STATUS_CODES.has(statusLike)) {
@@ -69,7 +69,7 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
   const backoffFactor = options?.backoffFactor ?? 2;
   const shouldRetry = options?.shouldRetry ?? defaultShouldRetry;
 
-  return async (ctx, next) => {
+  return async function retryLLMMiddleware(ctx, next) {
     let attempt = 0;
     let delay = initialDelayMs;
 
@@ -103,7 +103,7 @@ export interface TimeoutMiddlewareOptions {
 }
 
 export function timeoutMiddleware(options: TimeoutMiddlewareOptions): LLMMiddleware {
-  return async (ctx, next) => {
+  return async function timeoutLLMMiddleware(ctx, next) {
     const timeoutSignal = AbortSignal.timeout(options.ms);
     const previousSignal = ctx.options.signal;
     ctx.options = {
