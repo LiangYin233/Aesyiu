@@ -1,224 +1,113 @@
 import type { AgentContext } from '../context/index.js';
 import { filterVisibleMessages } from '../context/index.js';
+import { AesyiuProgrammingError, AesyiuRuntimeError, isRuntimeError } from '../error/index.js';
 import type {
+  EngineErrorSource,
+  EngineResult,
   Message,
-  ModelDefinition,
   Tool,
   TokenUsage,
   ToolCall,
-  EngineErrorSource,
-  EngineResult,
   RunStreamEvent,
 } from '../types/index.js';
 import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
-import { MemoryManager, type MemoryManagerConfig } from '../memory/index.js';
-import { createLoadSkillTool, renderSkillsPrompt, type AgentSkill } from '../skill/index.js';
-import type { GenerateOptions } from '../provider/index.js';
-import { encodeToolResultEnvelope, validateToolArguments, warnIfJSONSchemaTool } from '../tool/schema.js';
+import { MemoryManager } from '../memory/index.js';
+import { createLoadSkillTool, type AgentSkill } from '../skill/index.js';
+import type {
+  AfterToolCallHook,
+  AesyiuEngineConfig,
+  BeforeLLMRequestHook,
+  BeforeToolCallHook,
+  EngineHooks,
+  LLMMiddleware,
+  LLMMiddlewareContext,
+  Middleware,
+  RunOptions,
+  ToolMiddleware,
+} from './types.js';
+import { prepareOutboundMessages, prepareRun } from './preparation.js';
+import { collectStreamedLLMResult, runStreamWithMiddleware } from './stream.js';
+import { runToolCalls } from './tool-runner.js';
+import {
+  AsyncQueue,
+  chainMiddleware,
+  classifyAbortOrTimeout,
+  composeUserMiddleware,
+  consumeGenerator,
+  getCauseString,
+  getErrorMessage,
+  getErrorSource,
+  rethrowProgrammingError,
+  runHooks,
+} from './utils.js';
 
-export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
-
-export interface LLMMiddlewareContext {
-  readonly model: ModelDefinition;
-  messages: Message[];
-  tools: Tool[];
-  options: GenerateOptions;
-  readonly agentContext: AgentContext;
-}
-
-export type LLMMiddleware = (
-  ctx: LLMMiddlewareContext,
-  next: () => Promise<{ message: Message; usage: TokenUsage }>,
-) => Promise<{ message: Message; usage: TokenUsage }>;
-
-export interface ToolMiddlewareContext {
-  readonly tool: Tool;
-  readonly toolCall: ToolCall;
-  args: unknown;
-  readonly agentContext: AgentContext;
-}
-
-export type ToolMiddleware = (
-  ctx: ToolMiddlewareContext,
-  next: () => Promise<unknown>,
-) => Promise<unknown>;
-
-export type BeforeLLMRequestHookContext = LLMMiddlewareContext;
-
-export type BeforeLLMRequestHook = (
-  ctx: BeforeLLMRequestHookContext,
-) => void | Promise<void>;
-
-export type BeforeToolCallHookContext = ToolMiddlewareContext;
-
-export type BeforeToolCallHook = (
-  ctx: BeforeToolCallHookContext,
-) => void | Promise<void>;
-
-export interface AfterToolCallHookContext {
-  readonly tool: Tool;
-  readonly toolCall: ToolCall;
-  readonly args: unknown;
-  result: unknown;
-  readonly agentContext: AgentContext;
-}
-
-export type AfterToolCallHook = (
-  ctx: AfterToolCallHookContext,
-) => void | Promise<void>;
-
-export interface EngineHooks {
-  beforeLLMRequest?: BeforeLLMRequestHook;
-  beforeToolCall?: BeforeToolCallHook;
-  afterToolCall?: AfterToolCallHook;
-}
-
-export interface AesyiuEngineConfig {
-  maxSteps?: number;
-  memoryManager?: MemoryManager;
-  memoryConfig?: MemoryManagerConfig;
-  compatibilityMode?: boolean;
-}
-
-export interface RunOptions {
-  tools?: string[];
-  skills?: string[];
-  signal?: AbortSignal;
-}
-
-const SKILL_PROMPT_SECTION = 'aesyiu:skills';
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
-function getCauseString(error: unknown): string | undefined {
-  if (error instanceof Error) return error.stack ?? error.message;
-  return error !== undefined ? String(error) : undefined;
-}
-
-export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted) {
-    if (error === signal.reason) return true;
-  }
-  if (error instanceof Error) {
-    if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
-  }
-  return false;
-}
-
-function classifyAbortOrTimeout(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-  if (error instanceof Error && error.name === 'TimeoutError') return 'timeout';
-  if (isAbortError(error, signal)) return 'aborted';
-  return undefined;
-}
-
-class EngineDiagnosticError extends Error {
-  public readonly source: EngineErrorSource;
-
-  constructor(source: EngineErrorSource, cause: unknown) {
-    super(getErrorMessage(cause), { cause });
-    this.name = 'EngineDiagnosticError';
-    this.source = source;
-  }
-}
-
-function getErrorSource(error: unknown): EngineErrorSource | undefined {
-  return error instanceof EngineDiagnosticError ? error.source : undefined;
-}
-
-async function chainMiddleware<TCtx, TResult>(
-  middlewares: ReadonlyArray<(ctx: TCtx, next: () => Promise<TResult>) => Promise<TResult>>,
-  ctx: TCtx,
-  core: () => Promise<TResult>,
-): Promise<TResult> {
-  if (middlewares.length === 0) return core();
-
-  let index = -1;
-  const dispatch = (i: number): Promise<TResult> => {
-    if (i <= index) {
-      return Promise.reject(new Error('middleware next() called multiple times'));
-    }
-    index = i;
-    if (i >= middlewares.length) return core();
-    return middlewares[i](ctx, () => dispatch(i + 1));
-  };
-  return dispatch(0);
-}
-
-function composeUserMiddleware(
-  middlewares: Middleware[],
-  core: (ctx: AgentContext) => Promise<EngineResult>,
-): (ctx: AgentContext) => Promise<EngineResult> {
-  if (middlewares.length === 0) return core;
-
-  return async (ctx) => {
-    let result: EngineResult | undefined;
-    let index = -1;
-
-    const dispatch = async (i: number): Promise<void> => {
-      if (i <= index) throw new Error('next() called multiple times');
-      index = i;
-      if (i < middlewares.length) {
-        await middlewares[i](ctx, () => dispatch(i + 1));
-      } else {
-        result = await core(ctx);
-      }
-    };
-
-    await dispatch(0);
-    if (result === undefined) {
-      throw new Error('user middleware did not call next(); engine core did not run');
-    }
-    return result;
+function createLLMMiddlewareContext(
+  ctx: AgentContext,
+  messages: Message[],
+  tools: Tool[],
+  signal: AbortSignal | undefined,
+): LLMMiddlewareContext {
+  return {
+    model: ctx.activeModel,
+    messages,
+    tools,
+    options: signal ? { signal } : {},
+    agentContext: ctx,
   };
 }
 
-async function consumeGenerator<TResult>(gen: AsyncGenerator<unknown, TResult, void>): Promise<TResult> {
-  while (true) {
-    const next = await gen.next();
-    if (next.done) return next.value;
-  }
+function createResultBase(ctx: AgentContext): Pick<EngineResult, 'messages' | 'visibleMessages' | 'usage'> {
+  const messages = [...ctx.messages];
+  return {
+    messages,
+    visibleMessages: filterVisibleMessages(messages),
+    usage: ctx.sessionUsage,
+  };
 }
 
-class AsyncQueue<T> {
-  private items: T[] = [];
-  private waiters: Array<(v: IteratorResult<T, void>) => void> = [];
-  private closed = false;
-
-  public push(item: T): void {
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter({ value: item, done: false });
-    } else {
-      this.items.push(item);
-    }
-  }
-
-  public close(): void {
-    this.closed = true;
-    while (this.waiters.length > 0) {
-      this.waiters.shift()!({ value: undefined, done: true });
-    }
-  }
-
-  public async *drain(): AsyncGenerator<T, void, void> {
-    while (true) {
-      const buffered = this.items.shift();
-      if (buffered !== undefined) {
-        yield buffered;
-        continue;
-      }
-      if (this.closed) return;
-      const result = await new Promise<IteratorResult<T, void>>((resolve) => {
-        this.waiters.push(resolve);
-      });
-      if (result.done) return;
-      yield result.value;
-    }
-  }
+function createResult(status: 'completed' | 'max_steps_reached', ctx: AgentContext): EngineResult {
+  return {
+    status,
+    ...createResultBase(ctx),
+  };
 }
+
+function createErrorResult(
+  ctx: AgentContext,
+  error: unknown,
+  fallbackSource: EngineErrorSource,
+): EngineResult {
+  const source = getErrorSource(error) ?? fallbackSource;
+  const cause = getCauseString(isRuntimeError(error) ? error.cause : error);
+
+  return {
+    status: 'error',
+    ...createResultBase(ctx),
+    error: {
+      message: getErrorMessage(error),
+      source,
+      ...(cause ? { cause } : {}),
+    },
+  };
+}
+
+export type {
+  AfterToolCallHook,
+  AfterToolCallHookContext,
+  AesyiuEngineConfig,
+  BeforeLLMRequestHook,
+  BeforeLLMRequestHookContext,
+  BeforeToolCallHook,
+  BeforeToolCallHookContext,
+  EngineHooks,
+  LLMMiddleware,
+  LLMMiddlewareContext,
+  Middleware,
+  RunOptions,
+  ToolMiddleware,
+  ToolMiddlewareContext,
+} from './types.js';
+export { isAbortError } from './utils.js';
 
 export class AesyiuEngine {
   private globalTools: Map<string, Tool> = new Map();
@@ -237,7 +126,7 @@ export class AesyiuEngine {
 
   constructor(config?: AesyiuEngineConfig) {
     if (config?.memoryManager && config.memoryConfig) {
-      throw new Error('Provide either memoryManager or memoryConfig, not both');
+      throw new AesyiuProgrammingError('Provide either memoryManager or memoryConfig, not both');
     }
     this.maxSteps = config?.maxSteps ?? 10;
     this.mcpManager = new MCPManager();
@@ -307,7 +196,7 @@ export class AesyiuEngine {
     }
 
     if (this.globalTools.has('loadskill') && this.registeredSkills.length === 0) {
-      throw new Error('Tool "loadskill" is already registered by external code; cannot install skill loader');
+      throw new AesyiuProgrammingError('Tool "loadskill" is already registered by external code; cannot install skill loader');
     }
 
     this.registeredSkills = [...skills];
@@ -378,7 +267,7 @@ export class AesyiuEngine {
   }
 
   public async run(input: Message, ctx: AgentContext, options?: RunOptions): Promise<EngineResult> {
-    const { availableTools, signal } = this.prepareRun(input, ctx, options);
+    const { availableTools, signal } = prepareRun(input, ctx, options, this.globalTools, this.registeredSkills);
     const runner = composeUserMiddleware(
       this.middlewares,
       (c) => consumeGenerator(this.coreReactLoop(c, availableTools, signal, false)),
@@ -391,63 +280,13 @@ export class AesyiuEngine {
     ctx: AgentContext,
     options?: RunOptions,
   ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
-    const { availableTools, signal: externalSignal } = this.prepareRun(input, ctx, options);
-    const internalAbort = new AbortController();
-    const signal = externalSignal
-      ? AbortSignal.any([externalSignal, internalAbort.signal])
-      : internalAbort.signal;
-
-    if (this.middlewares.length === 0) {
-      try {
-        return yield* this.coreReactLoop(ctx, availableTools, signal, true);
-      } finally {
-        internalAbort.abort();
-      }
-    }
-
-    const eventQueue = new AsyncQueue<RunStreamEvent>();
-    const runner = composeUserMiddleware(this.middlewares, async (c) => {
-      const gen = this.coreReactLoop(c, availableTools, signal, true);
-      while (true) {
-        const n = await gen.next();
-        if (n.done) return n.value;
-        eventQueue.push(n.value);
-      }
-    });
-
-    let finalResult: EngineResult | undefined;
-    let runnerError: unknown;
-    const runnerPromise = (async () => {
-      try {
-        finalResult = await runner(ctx);
-      } catch (err) {
-        runnerError = err;
-      } finally {
-        eventQueue.close();
-      }
-    })();
-
-    try {
-      for await (const event of eventQueue.drain()) {
-        yield event;
-      }
-      await runnerPromise;
-      if (runnerError) throw runnerError;
-      return finalResult!;
-    } finally {
-      internalAbort.abort();
-      await runnerPromise.catch(() => {});
-    }
-  }
-
-  private prepareRun(input: Message, ctx: AgentContext, options?: RunOptions): {
-    availableTools: Map<string, Tool>;
-    signal: AbortSignal | undefined;
-  } {
-    const availableTools = this.resolveRunTools(options);
-    this.injectSkillPrompt(ctx, this.resolveRunSkills(options));
-    ctx.addMessage(input);
-    return { availableTools, signal: options?.signal };
+    const { availableTools, signal } = prepareRun(input, ctx, options, this.globalTools, this.registeredSkills);
+    return yield* runStreamWithMiddleware(
+      ctx,
+      this.middlewares,
+      signal,
+      (middlewareCtx, middlewareSignal) => this.coreReactLoop(middlewareCtx, availableTools, middlewareSignal, true),
+    );
   }
 
   private async *coreReactLoop(
@@ -467,7 +306,7 @@ export class AesyiuEngine {
         const abortError = reason instanceof Error
           ? reason
           : new Error(typeof reason === 'string' ? reason : 'Run aborted');
-        return this.createErrorResult(ctx, abortError, 'aborted');
+        return createErrorResult(ctx, abortError, 'aborted');
       }
 
       yield { type: 'step_start', step };
@@ -475,7 +314,7 @@ export class AesyiuEngine {
       let assistantMessage: Message;
       let usage: TokenUsage;
       try {
-        const outbound = this.prepareOutboundMessages([...ctx.messages]);
+        const outbound = prepareOutboundMessages([...ctx.messages], this.compatibilityMode);
         if (emitStream) {
           const result = yield* this.streamLLMStep(ctx, outbound, tools, signal);
           assistantMessage = result.message;
@@ -486,7 +325,8 @@ export class AesyiuEngine {
           usage = result.usage;
         }
       } catch (error) {
-        return this.createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'provider');
+        rethrowProgrammingError(error);
+        return createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'provider');
       }
 
       ctx.addMessage(assistantMessage);
@@ -499,12 +339,13 @@ export class AesyiuEngine {
           (msgs) => this.llmStep(ctx, msgs, [], signal),
         );
       } catch (error) {
-        return this.createErrorResult(ctx, error, 'memory');
+        rethrowProgrammingError(error);
+        return createErrorResult(ctx, error, 'memory');
       }
 
       if (!assistantMessage.tool_calls?.length) {
         yield { type: 'step_end', step };
-        return this.createResult('completed', ctx);
+        return createResult('completed', ctx);
       }
 
       for (const toolCall of assistantMessage.tool_calls) {
@@ -515,7 +356,8 @@ export class AesyiuEngine {
       try {
         toolResults = await this.runTools(assistantMessage.tool_calls, availableTools, ctx, signal);
       } catch (error) {
-        return this.createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'tool');
+        rethrowProgrammingError(error);
+        return createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'tool');
       }
       ctx.addMessages(toolResults);
 
@@ -526,7 +368,7 @@ export class AesyiuEngine {
       yield { type: 'step_end', step };
     }
 
-    return this.createResult('max_steps_reached', ctx);
+    return createResult('max_steps_reached', ctx);
   }
   private async llmStep(
     ctx: AgentContext,
@@ -534,19 +376,20 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): Promise<{ message: Message; usage: TokenUsage }> {
-    const mwCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
-
-    const core = async () => ctx.activeProvider.generate(
-      ctx.activeModel,
-      mwCtx.messages,
-      mwCtx.tools,
-      mwCtx.options,
+    const mwCtx = await runHooks(
+      this.beforeLLMRequestHooks,
+      createLLMMiddlewareContext(ctx, messages, tools, signal),
     );
 
     try {
-      return await chainMiddleware(this.llmMiddlewares, mwCtx, core);
+      return await chainMiddleware(
+        this.llmMiddlewares,
+        mwCtx,
+        () => ctx.activeProvider.generate(ctx.activeModel, mwCtx.messages, mwCtx.tools, mwCtx.options),
+      );
     } catch (error) {
-      throw new EngineDiagnosticError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
+      rethrowProgrammingError(error);
+      throw new AesyiuRuntimeError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
     }
   }
 
@@ -556,66 +399,42 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): AsyncGenerator<RunStreamEvent, { message: Message; usage: TokenUsage }, void> {
-    const mwCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
-
     const queue = new AsyncQueue<RunStreamEvent>();
 
-    const core = async (): Promise<{ message: Message; usage: TokenUsage }> => {
-      const stream = ctx.activeProvider.generateStream(
-        ctx.activeModel,
-        mwCtx.messages,
-        mwCtx.tools,
-        mwCtx.options,
+    const collectStreamResult = async (): Promise<{ message: Message; usage: TokenUsage }> => {
+      const mwCtx = await runHooks(
+        this.beforeLLMRequestHooks,
+        createLLMMiddlewareContext(ctx, messages, tools, signal),
       );
 
-      let content: string | null = null;
-      let toolCalls: ToolCall[] | undefined;
-      let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-
-      for await (const chunk of stream) {
-        if (chunk.usage) usage = chunk.usage;
-        if (chunk.delta) {
-          const currentContent = typeof chunk.message.content === 'string'
-            ? chunk.message.content
-            : (content ?? '') + chunk.delta;
-          queue.push({ type: 'text_delta', delta: chunk.delta, content: currentContent });
-        }
-        if (chunk.message.content !== undefined) {
-          content = chunk.message.content;
-        }
-        if (chunk.message.tool_calls !== undefined) {
-          toolCalls = chunk.message.tool_calls;
-        }
-      }
-
-      const finalMessage: Message = {
-        role: 'assistant',
-        content,
-        ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-      };
-      return { message: finalMessage, usage };
-    };
-
-    const resultPromise = (async () => {
       try {
-        return await chainMiddleware(this.llmMiddlewares, mwCtx, core);
+        return await chainMiddleware(
+          this.llmMiddlewares,
+          mwCtx,
+          () => collectStreamedLLMResult(
+            ctx.activeProvider.generateStream(
+              ctx.activeModel,
+              mwCtx.messages,
+              mwCtx.tools,
+              mwCtx.options,
+            ),
+            (event) => queue.push(event),
+          ),
+        );
+      } catch (error) {
+        rethrowProgrammingError(error);
+        throw new AesyiuRuntimeError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
       } finally {
         queue.close();
       }
-    })();
+    };
+    const resultPromise = collectStreamResult();
 
     for await (const event of queue.drain()) {
       yield event;
     }
 
-    try {
-      return await resultPromise;
-    } catch (error) {
-      throw new EngineDiagnosticError(
-        classifyAbortOrTimeout(error, signal) ?? 'provider',
-        error,
-      );
-    }
+    return await resultPromise;
   }
 
   private async runTools(
@@ -624,208 +443,14 @@ export class AesyiuEngine {
     ctx: AgentContext,
     signal: AbortSignal | undefined,
   ): Promise<Message[]> {
-    const toolAbort = new AbortController();
-    const combinedSignal = signal
-      ? AbortSignal.any([signal, toolAbort.signal])
-      : toolAbort.signal;
-
-    const promises = toolCalls.map((call) =>
-      this.runToolWithMiddleware(call, availableTools, ctx, combinedSignal),
+    return runToolCalls(
+      toolCalls,
+      availableTools,
+      ctx,
+      signal,
+      this.toolMiddlewares,
+      this.beforeToolCallHooks,
+      this.afterToolCallHooks,
     );
-    try {
-      return await Promise.all(promises);
-    } catch (error) {
-      toolAbort.abort();
-      await Promise.allSettled(promises);
-      throw new EngineDiagnosticError(classifyAbortOrTimeout(error, signal) ?? 'tool', error);
-    }
-  }
-
-  private async runToolWithMiddleware(
-    call: ToolCall,
-    availableTools: Map<string, Tool>,
-    ctx: AgentContext,
-    signal: AbortSignal | undefined,
-  ): Promise<Message> {
-    const tool = availableTools.get(call.name);
-    if (!tool) {
-      return this.toolFailureMessage(call, `Tool "${call.name}" not found`);
-    }
-
-    warnIfJSONSchemaTool(tool);
-
-    let parsedArgs: unknown;
-    try {
-      parsedArgs = JSON.parse(call.arguments);
-    } catch (err) {
-      return this.toolFailureMessage(call, getErrorMessage(err));
-    }
-
-    const validation = validateToolArguments(tool.parameters, parsedArgs);
-    if (!validation.success) {
-      return this.toolFailureMessage(call, validation.error);
-    }
-    parsedArgs = validation.data;
-
-    const mwCtx: ToolMiddlewareContext = {
-      tool,
-      toolCall: call,
-      args: parsedArgs,
-      agentContext: ctx,
-    };
-
-    try {
-      await this.applyBeforeToolCallHooks(mwCtx);
-      const result = await chainMiddleware(
-        this.toolMiddlewares,
-        mwCtx,
-        () => tool.execute(mwCtx.args as never, ctx, { signal }) as Promise<unknown>,
-      );
-      const finalResult = await this.applyAfterToolCallHooks({
-        tool,
-        toolCall: call,
-        args: mwCtx.args,
-        result,
-        agentContext: ctx,
-      });
-      return {
-        role: 'tool',
-        content: encodeToolResultEnvelope({ success: true, result: finalResult }),
-        tool_call_id: call.id,
-      };
-    } catch (err) {
-      if (isAbortError(err, signal)) throw err;
-      return this.toolFailureMessage(call, getErrorMessage(err));
-    }
-  }
-
-  private async applyBeforeLLMRequestHooks(
-    ctx: AgentContext,
-    messages: Message[],
-    tools: Tool[],
-    signal: AbortSignal | undefined,
-  ): Promise<LLMMiddlewareContext> {
-    return this.runHooks(this.beforeLLMRequestHooks, {
-      model: ctx.activeModel,
-      messages,
-      tools,
-      options: signal ? { signal } : {},
-      agentContext: ctx,
-    });
-  }
-
-  private async applyBeforeToolCallHooks(ctx: ToolMiddlewareContext): Promise<void> {
-    await this.runHooks(this.beforeToolCallHooks, ctx);
-  }
-
-  private async applyAfterToolCallHooks(ctx: AfterToolCallHookContext): Promise<unknown> {
-    return (await this.runHooks(this.afterToolCallHooks, ctx)).result;
-  }
-
-  private async runHooks<T>(hooks: ReadonlyArray<(ctx: T) => void | Promise<void>>, ctx: T): Promise<T> {
-    for (const hook of hooks) {
-      await hook(ctx);
-    }
-    return ctx;
-  }
-
-  private toolFailureMessage(call: ToolCall, error: string): Message {
-    return {
-      role: 'tool',
-      content: encodeToolResultEnvelope({ success: false, error }),
-      tool_call_id: call.id,
-    };
-  }
-
-  private createResult(status: 'completed' | 'max_steps_reached', ctx: AgentContext): EngineResult {
-    return {
-      status,
-      ...this.createResultBase(ctx),
-    };
-  }
-
-  private createErrorResult(ctx: AgentContext, error: unknown, fallbackSource: EngineErrorSource): EngineResult {
-    const source = getErrorSource(error) ?? fallbackSource;
-    const cause = getCauseString(error instanceof EngineDiagnosticError ? error.cause : error);
-
-    return {
-      status: 'error',
-      ...this.createResultBase(ctx),
-      error: {
-        message: getErrorMessage(error),
-        source,
-        ...(cause ? { cause } : {}),
-      },
-    };
-  }
-
-  private createResultBase(ctx: AgentContext): Pick<EngineResult, 'messages' | 'visibleMessages' | 'usage'> {
-    const messages = [...ctx.messages];
-    return {
-      messages,
-      visibleMessages: filterVisibleMessages(messages),
-      usage: ctx.sessionUsage,
-    };
-  }
-
-  private resolveRunTools(options?: RunOptions): Map<string, Tool> {
-    if (!options?.tools) return new Map(this.globalTools);
-
-    const availableTools = new Map<string, Tool>();
-    for (const toolName of options.tools) {
-      const tool = this.globalTools.get(toolName);
-      if (!tool) {
-        throw new Error(`Tool "${toolName}" is not registered`);
-      }
-
-      availableTools.set(toolName, tool);
-    }
-
-    return availableTools;
-  }
-
-  private resolveRunSkills(options?: RunOptions): AgentSkill[] {
-    if (!options?.skills) return [...this.registeredSkills];
-
-    const skillIndex = new Map(this.registeredSkills.map((skill) => [skill.name, skill]));
-    return options.skills.map((skillName) => {
-      const skill = skillIndex.get(skillName);
-      if (!skill) {
-        throw new Error(`Skill "${skillName}" is not registered`);
-      }
-
-      return skill;
-    });
-  }
-
-  private prepareOutboundMessages(messages: Message[]): Message[] {
-    if (!this.compatibilityMode) return messages;
-
-    const grouped = Object.groupBy(messages, (message) =>
-      message.role === 'system' ? 'system' : 'other',
-    ) as { system?: Message[]; other?: Message[] };
-    const systemMessages = grouped.system ?? [];
-
-    if (systemMessages.length <= 1) return messages;
-
-    const mergedSystemMessage: Message = {
-      role: 'system',
-      content: systemMessages.map((message) => message.content ?? '').join('\n\n'),
-    };
-
-    return [mergedSystemMessage, ...(grouped.other ?? [])];
-  }
-
-  private injectSkillPrompt(ctx: AgentContext, skills: readonly AgentSkill[]): void {
-    const content = renderSkillsPrompt(skills);
-    if (!content) {
-      ctx.removePromptSection(SKILL_PROMPT_SECTION);
-      return;
-    }
-
-    const section = ctx.registerPromptSection(SKILL_PROMPT_SECTION, { content, pinned: true });
-    if (section._meta) {
-      section._meta.skillPrompt = true;
-    }
   }
 }
