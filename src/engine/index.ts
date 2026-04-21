@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import type { AgentContext } from '../context/index.js';
 import type {
   Message,
@@ -15,6 +14,7 @@ import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/index.js';
 import { createLoadSkillTool, renderSkillsPrompt, type AgentSkill } from '../skill/index.js';
 import type { GenerateOptions } from '../provider/index.js';
+import { validateToolArguments } from '../tool/schema.js';
 
 export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
 
@@ -98,13 +98,6 @@ export interface RunOptions {
 }
 
 const SKILL_PROMPT_SECTION = 'aesyiu:skills';
-
-function isZodSchema(obj: unknown): obj is z.ZodType<unknown> {
-  return obj !== null
-    && typeof obj === 'object'
-    && 'safeParse' in obj
-    && typeof (obj as { safeParse: unknown }).safeParse === 'function';
-}
 
 function encodeEnvelope<T>(envelope: ToolResultEnvelope<T>): string {
   return JSON.stringify(envelope);
@@ -617,13 +610,11 @@ export class AesyiuEngine {
       return this.toolFailureMessage(call, (err as Error).message);
     }
 
-    if (tool.parameters && isZodSchema(tool.parameters)) {
-      const validation = tool.parameters.safeParse(parsedArgs);
-      if (!validation.success) {
-        return this.toolFailureMessage(call, validation.error.message);
-      }
-      parsedArgs = validation.data;
+    const validation = validateToolArguments(tool.parameters, parsedArgs);
+    if (!validation.success) {
+      return this.toolFailureMessage(call, validation.error);
     }
+    parsedArgs = validation.data;
 
     const mwCtx: ToolMiddlewareContext = {
       tool,

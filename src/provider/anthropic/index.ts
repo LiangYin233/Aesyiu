@@ -1,6 +1,7 @@
 import Anthropic, { type ClientOptions as AnthropicClientOptions } from '@anthropic-ai/sdk';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
 import { LLMProvider, type GenerateOptions } from '../index.js';
+import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const ANTHROPIC_MODELS: ModelDefinition[] = [
   { id: 'claude-opus-4-7', contextWindow: 200000, maxOutputTokens: 32000 },
@@ -103,7 +104,7 @@ export class AnthropicProvider extends LLMProvider {
     return tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
-      input_schema: tool.parameters as Anthropic.Tool.InputSchema,
+      input_schema: toProviderToolParameters(tool.parameters) as Anthropic.Tool.InputSchema,
     }));
   }
 

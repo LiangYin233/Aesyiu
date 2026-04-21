@@ -194,7 +194,7 @@ engine.registerTool(calculator);
 ### Zod vs JSONSchema
 
 `Tool.parameters` 接受 `ZodType | JSONSchema`：
-- **Zod**：运行时自动 `safeParse` 校验，失败返回错误信封
+- **Zod**：运行时自动 `safeParse` 校验，并在发给 provider 时自动转换成 JSON Schema
 - **JSONSchema**：透传给 provider，**不做运行时校验**（ToolExecutor 会 `console.warn` 一次）
 
 ### 过滤运行时工具

@@ -2,6 +2,7 @@ import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
 import { LLMProvider, type GenerateOptions } from '../index.js';
+import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const OPENAI_COMPLETION_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o', contextWindow: 128000, maxOutputTokens: 16384 },
@@ -74,7 +75,7 @@ export class OpenAICompletionProvider extends LLMProvider {
       function: {
         name: tool.name,
         description: tool.description,
-        parameters: tool.parameters as Record<string, unknown>,
+        parameters: toProviderToolParameters(tool.parameters) as Record<string, unknown>,
       },
     }));
   }

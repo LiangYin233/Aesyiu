@@ -1,6 +1,7 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
 import { LLMProvider, type GenerateOptions } from '../index.js';
+import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o', contextWindow: 128000, maxOutputTokens: 16384 },
@@ -87,7 +88,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
       type: 'function' as const,
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters as Record<string, unknown> | null,
+      parameters: toProviderToolParameters(tool.parameters) as Record<string, unknown> | null,
       strict: null,
     }));
   }

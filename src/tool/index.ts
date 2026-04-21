@@ -1,13 +1,6 @@
-import { z } from 'zod';
 import type { AgentContext } from '../context/index.js';
 import type { Tool, ToolCall, Message, ToolParameters, ToolResultEnvelope } from '../types/index.js';
-
-function isZodSchema(obj: unknown): obj is z.ZodType<unknown> {
-  return obj !== null &&
-    typeof obj === 'object' &&
-    'safeParse' in obj &&
-    typeof (obj as { safeParse: unknown }).safeParse === 'function';
-}
+import { isZodSchema, validateToolArguments } from './schema.js';
 
 function encodeEnvelope<T>(envelope: ToolResultEnvelope<T>): string {
   return JSON.stringify(envelope);
@@ -65,17 +58,17 @@ export class ToolExecutor {
       };
     }
 
-    if (tool.parameters && isZodSchema(tool.parameters)) {
-      const validationResult = tool.parameters.safeParse(parsedArgs);
-      if (!validationResult.success) {
+    const validationResult = validateToolArguments(tool.parameters, parsedArgs);
+    if (!validationResult.success) {
         return {
           role: 'tool',
-          content: encodeEnvelope({ success: false, error: validationResult.error.message }),
+          content: encodeEnvelope({ success: false, error: validationResult.error }),
           tool_call_id: call.id,
         };
-      }
-      parsedArgs = validationResult.data;
-    } else if (tool.parameters && typeof tool.parameters === 'object' && !warnedTools.has(tool)) {
+    }
+    parsedArgs = validationResult.data;
+
+    if (tool.parameters && !isZodSchema(tool.parameters) && !warnedTools.has(tool)) {
       warnedTools.add(tool);
       console.warn(
         `[aesyiu] tool "${tool.name}" uses a JSON schema; arguments pass through unvalidated. ` +
