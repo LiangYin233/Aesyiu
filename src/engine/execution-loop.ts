@@ -12,7 +12,7 @@ import type {
 } from '../types/index.js';
 import type { LLMMiddleware, ToolMiddleware } from './types.js';
 import { prepareOutboundMessages } from './preparation.js';
-import { runToolCalls } from './tool-runner.js';
+import { runToolCalls } from '../tool/runner.js';
 import { chainMiddleware, getErrorMessage, rethrowProgrammingError } from './utils.js';
 
 type LLMOperationResult = { message: Message; usage: TokenUsage };

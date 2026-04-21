@@ -9,7 +9,7 @@ import { ExecutionLoop } from './execution-loop.js';
 import { prepareRun } from './preparation.js';
 import { runStreamWithMiddleware } from './stream.js';
 import { consumeGenerator, runUserMiddleware } from './utils.js';
-import { ToolRegistry } from './tool-registry.js';
+import { ToolRegistry } from '../tool/registry.js';
 
 export type {
   AesyiuEngineConfig,

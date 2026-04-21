@@ -1,14 +1,14 @@
 import type { AgentContext } from '../context/index.js';
-import { validateToolArguments } from '../tool/schema.js';
+import { validateToolArguments } from './schema.js';
 import type { Message, Tool, ToolCall } from '../types/index.js';
-import type { ToolMiddleware } from './types.js';
+import type { ToolMiddleware } from '../engine/types.js';
 import {
   chainMiddleware,
   combineAbortSignals,
   getErrorMessage,
   isAbortError,
   rethrowProgrammingError,
-} from './utils.js';
+} from '../engine/utils.js';
 
 function toolFailureMessage(call: ToolCall, error: string): Message {
   return {

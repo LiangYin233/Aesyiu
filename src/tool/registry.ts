@@ -1,5 +1,5 @@
 import type { Tool } from '../types/index.js';
-import { isZodSchema } from '../tool/schema.js';
+import { isZodSchema } from './schema.js';
 
 export class ToolRegistry {
   private globalTools = new Map<string, Tool>();
