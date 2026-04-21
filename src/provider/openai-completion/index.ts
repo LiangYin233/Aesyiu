@@ -31,9 +31,9 @@ class StreamParser {
             arguments: tc.function?.arguments ?? '',
           });
         } else {
-          if (tc.id) existing.id = tc.id;
-          if (tc.function?.name) existing.name = tc.function.name;
-          if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+          if (tc.id) {existing.id = tc.id;}
+          if (tc.function?.name) {existing.name = tc.function.name;}
+          if (tc.function?.arguments) {existing.arguments += tc.function.arguments;}
         }
       }
     }
@@ -52,7 +52,7 @@ class StreamParser {
   }
 
   getToolCalls(): { id: string; name: string; arguments: string }[] | undefined {
-    if (this.toolCalls.size === 0) return undefined;
+    if (this.toolCalls.size === 0) {return undefined;}
     return Array.from(this.toolCalls.entries())
       .sort(([a], [b]) => a - b)
       .map(([, tc]) => tc);
@@ -207,14 +207,14 @@ export class OpenAICompletionProvider extends LLMProvider {
     for await (const chunk of stream) {
       parser.setUsage(chunk.usage ?? undefined);
       const delta = chunk.choices[0]?.delta;
-      if (!delta) continue;
+      if (!delta) {continue;}
       const event = parser.consume(delta);
-      if (event) yield event;
+      if (event) {yield event;}
     }
 
     const toolCalls = parser.getToolCalls();
-    if (toolCalls) yield { type: 'tool_calls', toolCalls };
+    if (toolCalls) {yield { type: 'tool_calls', toolCalls };}
     const usage = parser.getUsage();
-    if (usage) yield { type: 'usage', usage };
+    if (usage) {yield { type: 'usage', usage };}
   }
 }

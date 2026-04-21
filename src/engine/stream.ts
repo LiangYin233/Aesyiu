@@ -31,11 +31,11 @@ class EventQueue<T> {
         yield item;
         continue;
       }
-      if (this.closed) return;
+      if (this.closed) {return;}
       const result = await new Promise<IteratorResult<T, void>>((resolve) => {
         this.waiters.push(resolve);
       });
-      if (result.done) return;
+      if (result.done) {return;}
       yield result.value;
     }
   }
@@ -68,7 +68,7 @@ export async function* runStreamWithMiddleware(
         const gen = runCore(ctx, combinedSignal);
         while (true) {
           const next = await gen.next();
-          if (next.done) return next.value;
+          if (next.done) {return next.value;}
           queue.push(next.value);
         }
       });
@@ -84,7 +84,7 @@ export async function* runStreamWithMiddleware(
       yield event;
     }
     await runner;
-    if (runnerError) throw toError(runnerError);
+    if (runnerError) {throw toError(runnerError);}
     return finalResult!;
   } finally {
     internalAbort.abort();

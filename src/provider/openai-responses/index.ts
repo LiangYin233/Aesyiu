@@ -72,7 +72,7 @@ class StreamParser {
   }
 
   getToolCalls(): { id: string; name: string; arguments: string }[] | undefined {
-    if (this.toolCalls.size === 0) return undefined;
+    if (this.toolCalls.size === 0) {return undefined;}
     return Array.from(this.toolCalls.entries())
       .sort(([a], [b]) => a - b)
       .map(([, tc]) => tc);
@@ -244,12 +244,12 @@ export class OpenAIResponsesProvider extends LLMProvider {
 
     for await (const event of stream) {
       const streamEvent = parser.consume(event);
-      if (streamEvent) yield streamEvent;
+      if (streamEvent) {yield streamEvent;}
     }
 
     const toolCalls = parser.getToolCalls();
-    if (toolCalls) yield { type: 'tool_calls', toolCalls };
+    if (toolCalls) {yield { type: 'tool_calls', toolCalls };}
     const usage = parser.getUsage();
-    if (usage) yield { type: 'usage', usage };
+    if (usage) {yield { type: 'usage', usage };}
   }
 }

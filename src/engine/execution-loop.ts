@@ -182,9 +182,9 @@ export class ExecutionLoop {
   }
 
   private getErrorSource(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-    if (error instanceof Error && error.name === 'TimeoutError') return 'timeout';
-    if (signal?.aborted && error === signal.reason) return 'aborted';
-    if (error instanceof Error && error.name === 'AbortError') return 'aborted';
+    if (error instanceof Error && error.name === 'TimeoutError') {return 'timeout';}
+    if (signal?.aborted && error === signal.reason) {return 'aborted';}
+    if (error instanceof Error && error.name === 'AbortError') {return 'aborted';}
     return undefined;
   }
 }

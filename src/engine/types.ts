@@ -1,7 +1,7 @@
 import type { AgentContext } from '../context/index.js';
 import type { MemoryManager, MemoryManagerConfig } from '../memory/index.js';
 import type { GenerateOptions } from '../provider/index.js';
-import type { Message, ModelDefinition, Tool, TokenUsage } from '../types/index.js';
+import type { Message, ModelDefinition, Tool, ToolCall, TokenUsage } from '../types/index.js';
 
 export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
 
@@ -20,7 +20,7 @@ export type LLMMiddleware = (
 
 export interface ToolMiddlewareContext {
   readonly tool: Tool;
-  readonly toolCall: import('../types/index.js').ToolCall;
+  readonly toolCall: ToolCall;
   args: unknown;
   readonly agentContext: AgentContext;
 }

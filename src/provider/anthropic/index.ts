@@ -253,12 +253,12 @@ export class AnthropicProvider extends LLMProvider {
 
     for await (const event of stream) {
       const streamEvent = parser.consume(event);
-      if (streamEvent) yield streamEvent;
+      if (streamEvent) {yield streamEvent;}
     }
 
     const toolCalls = parser.getToolCalls();
-    if (toolCalls) yield { type: 'tool_calls', toolCalls };
+    if (toolCalls) {yield { type: 'tool_calls', toolCalls };}
     const usage = parser.getUsage();
-    if (usage) yield { type: 'usage', usage };
+    if (usage) {yield { type: 'usage', usage };}
   }
 }

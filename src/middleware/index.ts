@@ -67,7 +67,7 @@ async function doDelay(ms: number, signal?: AbortSignal): Promise<void> {
   try {
     await sleep(ms, undefined, { signal });
   } catch {
-    if (signal?.aborted) throw signal.reason;
+    if (signal?.aborted) {throw signal.reason;}
     throw new Error('Delay interrupted');
   }
 }
