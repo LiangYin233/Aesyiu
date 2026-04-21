@@ -83,8 +83,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
   }
 
   private toSDKTools(tools?: Tool[]): OpenAI.Responses.Tool[] | undefined {
-    if (!tools || tools.length === 0) return undefined;
-    return tools.map((tool) => ({
+    return this.mapTools(tools, (tool) => ({
       type: 'function' as const,
       name: tool.name,
       description: tool.description,

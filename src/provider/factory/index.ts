@@ -2,7 +2,7 @@ import type { ModelDefinition, ProviderConfig } from '../../types/index.js';
 import { AnthropicProvider, ANTHROPIC_MODELS } from '../anthropic/index.js';
 import { OpenAICompletionProvider, OPENAI_COMPLETION_MODELS } from '../openai-completion/index.js';
 import { OpenAIResponsesProvider, OPENAI_RESPONSES_MODELS } from '../openai-responses/index.js';
-import { LLMProvider } from '../index.js';
+import type { LLMProvider } from '../index.js';
 
 export type LLMProviderType = 'anthropic' | 'openai-completion' | 'openai-responses';
 

@@ -1,4 +1,5 @@
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../types/index.js';
+import { AesyiuProgrammingError } from '../error/index.js';
 
 export interface GenerateOptions {
   signal?: AbortSignal;
@@ -6,7 +7,7 @@ export interface GenerateOptions {
 
 export function requireToolCallId(message: Message): string {
   if (!message.tool_call_id) {
-    throw new Error('Tool message is missing tool_call_id');
+    throw new AesyiuProgrammingError('Tool message is missing tool_call_id');
   }
   return message.tool_call_id;
 }
@@ -54,6 +55,13 @@ export abstract class LLMProvider {
     return options?.signal ? { signal: options.signal } : undefined;
   }
 
+  protected mapTools<TResult>(
+    tools: Tool[] | undefined,
+    map: (tool: Tool) => TResult,
+  ): TResult[] | undefined {
+    return tools?.length ? tools.map(map) : undefined;
+  }
+
   public abstract generate(
     model: ModelDefinition | string,
     messages: Message[],
@@ -72,7 +80,7 @@ export abstract class LLMProvider {
     baseParams: Record<string, any>,
     extraBody?: Record<string, unknown>,
   ): Record<string, any> {
-    if (!extraBody) return baseParams;
+    if (!extraBody) {return baseParams;}
     return { ...extraBody, ...baseParams };
   }
 }

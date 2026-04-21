@@ -69,8 +69,7 @@ export class OpenAICompletionProvider extends LLMProvider {
   }
 
   private toSDKTools(tools?: Tool[]): ChatCompletionTool[] | undefined {
-    if (!tools || tools.length === 0) return undefined;
-    return tools.map((tool) => ({
+    return this.mapTools(tools, (tool) => ({
       type: 'function' as const,
       function: {
         name: tool.name,
@@ -164,7 +163,7 @@ export class OpenAICompletionProvider extends LLMProvider {
       }
 
       const delta = chunk.choices[0]?.delta;
-      if (!delta) continue;
+      if (!delta) {continue;}
 
       if (delta.content) {
         content += delta.content;
@@ -181,9 +180,9 @@ export class OpenAICompletionProvider extends LLMProvider {
               arguments: tc.function?.arguments ?? '',
             });
           } else {
-            if (tc.id) existing.id = tc.id;
-            if (tc.function?.name) existing.name = tc.function.name;
-            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+            if (tc.id) {existing.id = tc.id;}
+            if (tc.function?.name) {existing.name = tc.function.name;}
+            if (tc.function?.arguments) {existing.arguments += tc.function.arguments;}
           }
         }
       }

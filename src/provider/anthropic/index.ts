@@ -100,8 +100,7 @@ export class AnthropicProvider extends LLMProvider {
   }
 
   private toSDKTools(tools?: Tool[]): AnthropicTool[] | undefined {
-    if (!tools || tools.length === 0) return undefined;
-    return tools.map((tool) => ({
+    return this.mapTools(tools, (tool) => ({
       name: tool.name,
       description: tool.description,
       input_schema: toProviderToolParameters(tool.parameters) as Anthropic.Tool.InputSchema,

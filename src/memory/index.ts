@@ -1,4 +1,5 @@
 import type { AgentContext } from '../context/index.js';
+import { isProgrammingError } from '../error/index.js';
 import type { EngineErrorSource, Message, TokenUsage } from '../types/index.js';
 
 export interface MemoryManagerConfig {
@@ -22,8 +23,8 @@ interface MessagePartition {
 const ABORT_LIKE_SOURCES: ReadonlySet<EngineErrorSource> = new Set(['aborted', 'timeout']);
 
 function isAbortLike(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
+  if (!(error instanceof Error)) {return false;}
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') {return true;}
   const source = (error as { source?: unknown }).source;
   return typeof source === 'string' && ABORT_LIKE_SOURCES.has(source as EngineErrorSource);
 }
@@ -57,7 +58,8 @@ export class MemoryManager {
       const summary = await this.compressMessages(ctx, compressible, llm);
       ctx.replaceMessages([...pinned, summary, ...protectedLatest]);
     } catch (error) {
-      if (isAbortLike(error)) throw error;
+      if (isAbortLike(error)) {throw error;}
+      if (isProgrammingError(error)) {throw error;}
       console.warn('[aesyiu] memory compression failed; dropping compressible history', error);
       ctx.replaceMessages([...pinned, ...protectedLatest]);
     }
