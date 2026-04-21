@@ -56,6 +56,8 @@ function createLLMMiddlewareContext(
   };
 }
 
+type LLMOperationResult = { message: Message; usage: TokenUsage };
+
 function createResultBase(ctx: AgentContext): Pick<EngineResult, 'messages' | 'visibleMessages' | 'usage'> {
   const messages = [...ctx.messages];
   return {
@@ -379,7 +381,47 @@ export class AesyiuEngine {
     messages: Message[],
     tools: Tool[],
     signal: AbortSignal | undefined,
-  ): Promise<{ message: Message; usage: TokenUsage }> {
+  ): Promise<LLMOperationResult> {
+    return this.executeLLMOperation(ctx, messages, tools, signal, (mwCtx) =>
+      ctx.activeProvider.generate(ctx.activeModel, mwCtx.messages, mwCtx.tools, mwCtx.options),
+    );
+  }
+
+  private async *streamLLMStep(
+    ctx: AgentContext,
+    messages: Message[],
+    tools: Tool[],
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<RunStreamEvent, LLMOperationResult, void> {
+    const queue = new AsyncQueue<RunStreamEvent>();
+    const resultPromise = this.executeLLMOperation(ctx, messages, tools, signal, (mwCtx) =>
+      collectStreamedLLMResult(
+        ctx.activeProvider.generateStream(
+          ctx.activeModel,
+          mwCtx.messages,
+          mwCtx.tools,
+          mwCtx.options,
+        ),
+        (event) => queue.push(event),
+      ),
+    ).finally(() => {
+      queue.close();
+    });
+
+    for await (const event of queue.drain()) {
+      yield event;
+    }
+
+    return await resultPromise;
+  }
+
+  private async executeLLMOperation(
+    ctx: AgentContext,
+    messages: Message[],
+    tools: Tool[],
+    signal: AbortSignal | undefined,
+    operation: (mwCtx: LLMMiddlewareContext) => Promise<LLMOperationResult>,
+  ): Promise<LLMOperationResult> {
     const mwCtx = await runHooks(
       this.beforeLLMRequestHooks,
       createLLMMiddlewareContext(ctx, messages, tools, signal),
@@ -389,56 +431,12 @@ export class AesyiuEngine {
       return await chainMiddleware(
         this.llmMiddlewares,
         mwCtx,
-        () => ctx.activeProvider.generate(ctx.activeModel, mwCtx.messages, mwCtx.tools, mwCtx.options),
+        () => operation(mwCtx),
       );
     } catch (error) {
       rethrowProgrammingError(error);
       throw new AesyiuRuntimeError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
     }
-  }
-
-  private async *streamLLMStep(
-    ctx: AgentContext,
-    messages: Message[],
-    tools: Tool[],
-    signal: AbortSignal | undefined,
-  ): AsyncGenerator<RunStreamEvent, { message: Message; usage: TokenUsage }, void> {
-    const queue = new AsyncQueue<RunStreamEvent>();
-
-    const collectStreamResult = async (): Promise<{ message: Message; usage: TokenUsage }> => {
-      const mwCtx = await runHooks(
-        this.beforeLLMRequestHooks,
-        createLLMMiddlewareContext(ctx, messages, tools, signal),
-      );
-
-      try {
-        return await chainMiddleware(
-          this.llmMiddlewares,
-          mwCtx,
-          () => collectStreamedLLMResult(
-            ctx.activeProvider.generateStream(
-              ctx.activeModel,
-              mwCtx.messages,
-              mwCtx.tools,
-              mwCtx.options,
-            ),
-            (event) => queue.push(event),
-          ),
-        );
-      } catch (error) {
-        rethrowProgrammingError(error);
-        throw new AesyiuRuntimeError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
-      } finally {
-        queue.close();
-      }
-    };
-    const resultPromise = collectStreamResult();
-
-    for await (const event of queue.drain()) {
-      yield event;
-    }
-
-    return await resultPromise;
   }
 
   private async runTools(
