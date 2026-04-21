@@ -16,8 +16,6 @@ import { createLoadSkillTool, renderSkillsPrompt, type AgentSkill } from '../ski
 import type { GenerateOptions } from '../provider/index.js';
 import { encodeToolResultEnvelope, validateToolArguments, warnIfJSONSchemaTool } from '../tool/schema.js';
 
-export { filterVisibleMessages } from '../context/index.js';
-
 export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
 
 export interface LLMMiddlewareContext {
@@ -45,24 +43,13 @@ export type ToolMiddleware = (
   next: () => Promise<unknown>,
 ) => Promise<unknown>;
 
-export interface BeforeLLMRequestHookContext {
-  readonly model: ModelDefinition;
-  messages: Message[];
-  tools: Tool[];
-  options: GenerateOptions;
-  readonly agentContext: AgentContext;
-}
+export type BeforeLLMRequestHookContext = LLMMiddlewareContext;
 
 export type BeforeLLMRequestHook = (
   ctx: BeforeLLMRequestHookContext,
 ) => void | Promise<void>;
 
-export interface BeforeToolCallHookContext {
-  readonly tool: Tool;
-  readonly toolCall: ToolCall;
-  args: unknown;
-  readonly agentContext: AgentContext;
-}
+export type BeforeToolCallHookContext = ToolMiddlewareContext;
 
 export type BeforeToolCallHook = (
   ctx: BeforeToolCallHookContext,
@@ -121,12 +108,8 @@ export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
   return false;
 }
 
-function isTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'TimeoutError';
-}
-
 function classifyAbortOrTimeout(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-  if (isTimeoutError(error)) return 'timeout';
+  if (error instanceof Error && error.name === 'TimeoutError') return 'timeout';
   if (isAbortError(error, signal)) return 'aborted';
   return undefined;
 }
@@ -459,7 +442,11 @@ export class AesyiuEngine {
       step++;
 
       if (signal?.aborted) {
-        return this.createAbortedResult(ctx, signal);
+        const reason = signal.reason;
+        const abortError = reason instanceof Error
+          ? reason
+          : new Error(typeof reason === 'string' ? reason : 'Run aborted');
+        return this.createErrorResult(ctx, abortError, 'aborted');
       }
 
       yield { type: 'step_start', step };
@@ -526,14 +513,7 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): Promise<{ message: Message; usage: TokenUsage }> {
-    const hookCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
-    const mwCtx: LLMMiddlewareContext = {
-      model: ctx.activeModel,
-      messages: hookCtx.messages,
-      tools: hookCtx.tools,
-      options: hookCtx.options,
-      agentContext: ctx,
-    };
+    const mwCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
 
     const core = async () => ctx.activeProvider.generate(
       ctx.activeModel,
@@ -555,14 +535,7 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): AsyncGenerator<RunStreamEvent, { message: Message; usage: TokenUsage }, void> {
-    const hookCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
-    const mwCtx: LLMMiddlewareContext = {
-      model: ctx.activeModel,
-      messages: hookCtx.messages,
-      tools: hookCtx.tools,
-      options: hookCtx.options,
-      agentContext: ctx,
-    };
+    const mwCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
 
     const queue = new AsyncQueue<RunStreamEvent>();
 
@@ -705,55 +678,33 @@ export class AesyiuEngine {
     messages: Message[],
     tools: Tool[],
     signal: AbortSignal | undefined,
-  ): Promise<BeforeLLMRequestHookContext> {
-    const hookCtx: BeforeLLMRequestHookContext = {
+  ): Promise<LLMMiddlewareContext> {
+    const mwCtx: LLMMiddlewareContext = {
       model: ctx.activeModel,
-      messages: [...messages],
-      tools: [...tools],
+      messages,
+      tools,
       options: signal ? { signal } : {},
       agentContext: ctx,
     };
 
     for (const hook of this.beforeLLMRequestHooks) {
-      await hook(hookCtx);
+      await hook(mwCtx);
     }
 
-    return hookCtx;
+    return mwCtx;
   }
 
   private async applyBeforeToolCallHooks(ctx: ToolMiddlewareContext): Promise<void> {
-    if (this.beforeToolCallHooks.length === 0) return;
-
-    const hookCtx: BeforeToolCallHookContext = {
-      tool: ctx.tool,
-      toolCall: ctx.toolCall,
-      args: ctx.args,
-      agentContext: ctx.agentContext,
-    };
-
     for (const hook of this.beforeToolCallHooks) {
-      await hook(hookCtx);
+      await hook(ctx);
     }
-
-    ctx.args = hookCtx.args;
   }
 
   private async applyAfterToolCallHooks(ctx: AfterToolCallHookContext): Promise<unknown> {
-    if (this.afterToolCallHooks.length === 0) return ctx.result;
-
-    const hookCtx: AfterToolCallHookContext = {
-      tool: ctx.tool,
-      toolCall: ctx.toolCall,
-      args: ctx.args,
-      result: ctx.result,
-      agentContext: ctx.agentContext,
-    };
-
     for (const hook of this.afterToolCallHooks) {
-      await hook(hookCtx);
+      await hook(ctx);
     }
-
-    return hookCtx.result;
+    return ctx.result;
   }
 
   private toolFailureMessage(call: ToolCall, error: string): Message {
@@ -789,21 +740,6 @@ export class AesyiuEngine {
         source,
         ...(cause ? { cause } : {}),
       },
-    };
-  }
-
-  private createAbortedResult(ctx: AgentContext, signal?: AbortSignal): EngineResult {
-    const reason = signal?.reason;
-    const message = reason instanceof Error ? reason.message
-      : typeof reason === 'string' ? reason
-      : 'Run aborted';
-    const snapshot = [...ctx.messages];
-    return {
-      status: 'error',
-      messages: snapshot,
-      visibleMessages: filterVisibleMessages(snapshot),
-      usage: ctx.sessionUsage,
-      error: { message, source: 'aborted' },
     };
   }
 

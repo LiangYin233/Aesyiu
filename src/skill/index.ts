@@ -1,4 +1,5 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Tool } from '../types/index.js';
@@ -212,15 +213,20 @@ function buildSkillIndex(skills: readonly AgentSkill[]): Map<string, AgentSkill>
   return skillIndex;
 }
 
+async function statOrThrow(filePath: string, notFoundMessage: string): Promise<Stats> {
+  try {
+    return await stat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(notFoundMessage);
+    }
+    throw error;
+  }
+}
+
 export async function loadSkill(skillPath: string): Promise<AgentSkill> {
   const resolvedRootPath = path.resolve(skillPath);
-  const rootStats = await stat(resolvedRootPath).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`Skill directory not found: ${resolvedRootPath}`);
-    }
-
-    throw error;
-  });
+  const rootStats = await statOrThrow(resolvedRootPath, `Skill directory not found: ${resolvedRootPath}`);
 
   if (!rootStats.isDirectory()) {
     throw new Error(`Skill path must be a directory: ${resolvedRootPath}`);
@@ -228,13 +234,7 @@ export async function loadSkill(skillPath: string): Promise<AgentSkill> {
 
   const rootPath = await realpath(resolvedRootPath);
   const entryPath = path.join(rootPath, SKILL_FILE_NAME);
-  const entryStats = await stat(entryPath).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`Skill entry file not found: ${entryPath}`);
-    }
-
-    throw error;
-  });
+  const entryStats = await statOrThrow(entryPath, `Skill entry file not found: ${entryPath}`);
 
   if (!entryStats.isFile()) {
     throw new Error(`Skill entry path must be a file: ${entryPath}`);
@@ -257,13 +257,10 @@ export async function loadSkill(skillPath: string): Promise<AgentSkill> {
 
 export async function loadSkills(rootDirectoryPath: string): Promise<AgentSkill[]> {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
-  const directoryStats = await stat(resolvedRootDirectoryPath).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`Skills root directory not found: ${resolvedRootDirectoryPath}`);
-    }
-
-    throw error;
-  });
+  const directoryStats = await statOrThrow(
+    resolvedRootDirectoryPath,
+    `Skills root directory not found: ${resolvedRootDirectoryPath}`,
+  );
 
   if (!directoryStats.isDirectory()) {
     throw new Error(`Skills root path must be a directory: ${resolvedRootDirectoryPath}`);
