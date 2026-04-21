@@ -22,8 +22,8 @@ export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promi
 
 export interface LLMMiddlewareContext {
   readonly model: ModelDefinition;
-  readonly messages: Message[];
-  readonly tools: Tool[];
+  messages: Message[];
+  tools: Tool[];
   options: GenerateOptions;
   readonly agentContext: AgentContext;
 }
@@ -121,6 +121,16 @@ export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
   return false;
 }
 
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
+
+function classifyAbortOrTimeout(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
+  if (isTimeoutError(error)) return 'timeout';
+  if (isAbortError(error, signal)) return 'aborted';
+  return undefined;
+}
+
 class EngineDiagnosticError extends Error {
   public readonly source: EngineErrorSource;
 
@@ -175,7 +185,10 @@ function composeUserMiddleware(
     };
 
     await dispatch(0);
-    return result!;
+    if (result === undefined) {
+      throw new Error('user middleware did not call next(); engine core did not run');
+    }
+    return result;
   };
 }
 
@@ -321,8 +334,17 @@ export class AesyiuEngine {
   }
 
   public async registerMCPServers(configs: MCPServerConfig[]): Promise<this> {
-    for (const config of configs) {
-      await this.registerMCPServer(config);
+    const registered: string[] = [];
+    try {
+      for (const config of configs) {
+        await this.registerMCPServer(config);
+        registered.push(config.name);
+      }
+    } catch (error) {
+      for (const name of registered) {
+        await this.unregisterMCPServer(name).catch(() => { /* best-effort rollback */ });
+      }
+      throw error;
     }
 
     return this;
@@ -383,7 +405,39 @@ export class AesyiuEngine {
     const availableTools = this.resolveRunTools(options);
     const signal = options?.signal;
 
-    return yield* this.coreReactLoop(ctx, availableTools, signal, true);
+    if (this.middlewares.length === 0) {
+      return yield* this.coreReactLoop(ctx, availableTools, signal, true);
+    }
+
+    const eventQueue = new AsyncQueue<RunStreamEvent>();
+    const runner = composeUserMiddleware(this.middlewares, async (c) => {
+      const gen = this.coreReactLoop(c, availableTools, signal, true);
+      while (true) {
+        const n = await gen.next();
+        if (n.done) return n.value;
+        eventQueue.push(n.value);
+      }
+    });
+
+    let finalResult: EngineResult | undefined;
+    let runnerError: unknown;
+    const runnerPromise = (async () => {
+      try {
+        finalResult = await runner(ctx);
+      } catch (err) {
+        runnerError = err;
+      } finally {
+        eventQueue.close();
+      }
+    })();
+
+    for await (const event of eventQueue.drain()) {
+      yield event;
+    }
+
+    await runnerPromise;
+    if (runnerError) throw runnerError;
+    return finalResult!;
   }
 
   private prepareRun(input: Message, ctx: AgentContext, options?: RunOptions): void {
@@ -424,7 +478,7 @@ export class AesyiuEngine {
           usage = result.usage;
         }
       } catch (error) {
-        return this.createErrorResult(ctx, error, isAbortError(error, signal) ? 'aborted' : 'provider');
+        return this.createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'provider');
       }
 
       ctx.addMessage(assistantMessage);
@@ -453,7 +507,7 @@ export class AesyiuEngine {
       try {
         toolResults = await this.runTools(assistantMessage.tool_calls, availableTools, ctx, signal);
       } catch (error) {
-        return this.createErrorResult(ctx, error, isAbortError(error, signal) ? 'aborted' : 'tool');
+        return this.createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'tool');
       }
       ctx.addMessages(toolResults);
 
@@ -491,7 +545,7 @@ export class AesyiuEngine {
     try {
       return await chainMiddleware(this.llmMiddlewares, mwCtx, core);
     } catch (error) {
-      throw this.createDiagnosticError(isAbortError(error, signal) ? 'aborted' : 'provider', error);
+      throw new EngineDiagnosticError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
     }
   }
 
@@ -566,8 +620,8 @@ export class AesyiuEngine {
     try {
       return await resultPromise;
     } catch (error) {
-      throw this.createDiagnosticError(
-        isAbortError(resultError ?? error, signal) ? 'aborted' : 'provider',
+      throw new EngineDiagnosticError(
+        classifyAbortOrTimeout(resultError ?? error, signal) ?? 'provider',
         error,
       );
     }
@@ -584,7 +638,7 @@ export class AesyiuEngine {
         (toolCalls ?? []).map((call) => this.runToolWithMiddleware(call, availableTools, ctx, signal)),
       );
     } catch (error) {
-      throw this.createDiagnosticError(isAbortError(error, signal) ? 'aborted' : 'tool', error);
+      throw new EngineDiagnosticError(classifyAbortOrTimeout(error, signal) ?? 'tool', error);
     }
   }
 
@@ -708,10 +762,6 @@ export class AesyiuEngine {
       content: encodeToolResultEnvelope({ success: false, error }),
       tool_call_id: call.id,
     };
-  }
-
-  private createDiagnosticError(source: EngineErrorSource, error: unknown): Error {
-    return new EngineDiagnosticError(source, error);
   }
 
   private createResult(status: 'completed' | 'max_steps_reached', ctx: AgentContext): EngineResult {

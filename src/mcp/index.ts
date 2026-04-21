@@ -126,9 +126,18 @@ export class MCPManager {
 
   public async registerServers(configs: MCPServerConfig[]): Promise<Tool[]> {
     const tools: Tool[] = [];
+    const registered: string[] = [];
 
-    for (const config of configs) {
-      tools.push(...await this.registerServer(config));
+    try {
+      for (const config of configs) {
+        tools.push(...await this.registerServer(config));
+        registered.push(config.name);
+      }
+    } catch (error) {
+      for (const name of registered) {
+        await this.unregisterServer(name).catch(() => { /* best-effort rollback */ });
+      }
+      throw error;
     }
 
     return tools;

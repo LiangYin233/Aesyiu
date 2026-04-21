@@ -77,8 +77,11 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
       try {
         return await next();
       } catch (error) {
-        if (attempt >= maxRetries || !shouldRetry(error, attempt) || ctx.options.signal?.aborted) {
+        if (attempt >= maxRetries || !shouldRetry(error, attempt)) {
           throw error;
+        }
+        if (ctx.options.signal?.aborted) {
+          throw ctx.options.signal.reason ?? error;
         }
         try {
           await sleep(delay, undefined, { signal: ctx.options.signal });

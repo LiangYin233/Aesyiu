@@ -13,10 +13,7 @@ export interface CreateLLMProviderInput {
 }
 
 function cloneModelDefinition(model: ModelDefinition): ModelDefinition {
-  return {
-    ...model,
-    ...(model.extraBody ? { extraBody: { ...model.extraBody } } : {}),
-  };
+  return structuredClone(model);
 }
 
 export function createLLMProvider(input: CreateLLMProviderInput): LLMProvider {

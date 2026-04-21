@@ -45,7 +45,7 @@ export interface ProviderConfig {
 
 export type EngineResultStatus = 'completed' | 'max_steps_reached' | 'error';
 
-export type EngineErrorSource = 'provider' | 'memory' | 'tool' | 'engine' | 'aborted' | 'unknown';
+export type EngineErrorSource = 'provider' | 'memory' | 'tool' | 'engine' | 'aborted' | 'timeout' | 'unknown';
 
 export interface EngineErrorInfo {
   message: string;
