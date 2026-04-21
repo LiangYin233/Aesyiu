@@ -1,4 +1,4 @@
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../types/index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../types/index.js';
 import { AesyiuProgrammingError } from '../error/index.js';
 
 export interface GenerateOptions {
@@ -63,5 +63,5 @@ export abstract class LLMProvider {
     messages: Message[],
     tools?: Tool[],
     options?: GenerateOptions,
-  ): AsyncGenerator<StreamChunk, void>;
+  ): AsyncGenerator<StreamEvent, void>;
 }

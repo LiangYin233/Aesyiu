@@ -1,5 +1,5 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../../types/index.js';
 import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
@@ -8,10 +8,79 @@ export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o-mini', contextWindow: 128000, maxOutputTokens: 16384 },
 ];
 
-interface StreamedToolCallState {
-  id: string;
-  name: string;
-  arguments: string;
+class StreamParser {
+  private content = '';
+  private toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+  private usage: TokenUsage | undefined;
+
+  consume(event: OpenAI.Responses.ResponseStreamEvent): StreamEvent | undefined {
+    switch (event.type) {
+      case 'response.output_text.delta':
+        this.content += event.delta;
+        return { type: 'text', delta: event.delta, content: this.content };
+      case 'response.function_call_arguments.delta': {
+        const current = this.toolCalls.get(event.output_index) ?? {
+          id: event.item_id,
+          name: '',
+          arguments: '',
+        };
+        current.arguments += event.delta;
+        this.toolCalls.set(event.output_index, current);
+        return undefined;
+      }
+      case 'response.function_call_arguments.done': {
+        const current = this.toolCalls.get(event.output_index) ?? {
+          id: event.item_id,
+          name: event.name,
+          arguments: '',
+        };
+        current.id = event.item_id;
+        current.name = event.name;
+        current.arguments = event.arguments;
+        this.toolCalls.set(event.output_index, current);
+        return undefined;
+      }
+      case 'response.output_item.done': {
+        const item = event.item;
+        if (item?.type === 'function_call') {
+          const current = this.toolCalls.get(event.output_index) ?? {
+            id: item.call_id ?? '',
+            name: item.name ?? '',
+            arguments: '',
+          };
+          current.id = item.call_id ?? current.id;
+          current.name = item.name ?? current.name;
+          current.arguments ||= item.arguments ?? '';
+          this.toolCalls.set(event.output_index, current);
+        }
+        return undefined;
+      }
+      case 'response.completed': {
+        const resp = event.response;
+        if (resp?.usage) {
+          this.usage = {
+            promptTokens: resp.usage.input_tokens ?? 0,
+            completionTokens: resp.usage.output_tokens ?? 0,
+            totalTokens: (resp.usage.input_tokens ?? 0) + (resp.usage.output_tokens ?? 0),
+          };
+        }
+        return undefined;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  getToolCalls(): { id: string; name: string; arguments: string }[] | undefined {
+    if (this.toolCalls.size === 0) return undefined;
+    return Array.from(this.toolCalls.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, tc]) => tc);
+  }
+
+  getUsage(): TokenUsage | undefined {
+    return this.usage;
+  }
 }
 
 export class OpenAIResponsesProvider extends LLMProvider {
@@ -152,7 +221,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
     messages: Message[],
     tools?: Tool[],
     options?: GenerateOptions,
-  ): AsyncGenerator<StreamChunk, void> {
+  ): AsyncGenerator<StreamEvent, void> {
     const modelDef = this.resolveModel(model);
     const input = this.toSDKInput(messages);
     const params: Record<string, any> = {
@@ -171,62 +240,16 @@ export class OpenAIResponsesProvider extends LLMProvider {
       options?.signal ? { signal: options.signal } : undefined,
     );
 
-    let content = '';
-    const toolCalls = new Map<number, StreamedToolCallState>();
-    let finalUsage: TokenUsage | undefined;
+    const parser = new StreamParser();
 
     for await (const event of stream) {
-      if (event.type === 'response.output_text.delta') {
-        content += event.delta;
-        yield { message: { role: 'assistant', content }, delta: event.delta };
-      } else if (event.type === 'response.function_call_arguments.delta') {
-        const current = toolCalls.get(event.output_index) ?? {
-          id: event.item_id,
-          name: '',
-          arguments: '',
-        };
-        current.arguments += event.delta;
-        toolCalls.set(event.output_index, current);
-      } else if (event.type === 'response.function_call_arguments.done') {
-        const current = toolCalls.get(event.output_index) ?? {
-          id: event.item_id,
-          name: event.name,
-          arguments: '',
-        };
-        current.id = event.item_id;
-        current.name = event.name;
-        current.arguments = event.arguments;
-        toolCalls.set(event.output_index, current);
-      } else if (event.type === 'response.output_item.done') {
-        const item = event.item;
-        if (item?.type === 'function_call') {
-          const current = toolCalls.get(event.output_index) ?? {
-            id: item.call_id ?? '',
-            name: item.name ?? '',
-            arguments: '',
-          };
-          current.id = item.call_id ?? current.id;
-          current.name = item.name ?? current.name;
-          current.arguments ||= item.arguments ?? '';
-          toolCalls.set(event.output_index, current);
-        }
-      } else if (event.type === 'response.completed') {
-        const resp = event.response;
-        if (resp?.usage) {
-          finalUsage = {
-            promptTokens: resp.usage.input_tokens ?? 0,
-            completionTokens: resp.usage.output_tokens ?? 0,
-            totalTokens: (resp.usage.input_tokens ?? 0) + (resp.usage.output_tokens ?? 0),
-          };
-        }
-      }
+      const streamEvent = parser.consume(event);
+      if (streamEvent) yield streamEvent;
     }
 
-    const finalToolCalls = Array.from(toolCalls.entries())
-      .sort(([left], [right]) => left - right)
-      .map(([, toolCall]) => toolCall);
-
-    const finalMessage = this.buildAssistantMessage(content, finalToolCalls);
-    yield { message: finalMessage, usage: finalUsage };
+    const toolCalls = parser.getToolCalls();
+    if (toolCalls) yield { type: 'tool_calls', toolCalls };
+    const usage = parser.getUsage();
+    if (usage) yield { type: 'usage', usage };
   }
 }

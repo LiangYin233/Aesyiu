@@ -15,7 +15,7 @@ export type {
   ToolParameters,
   ToolResultEnvelope,
   JSONSchema,
-  StreamChunk,
+  StreamEvent,
   RunStreamEvent,
 } from './types/index.js';
 export { AgentContext, filterVisibleMessages } from './context/index.js';

@@ -1,4 +1,5 @@
 import type { ZodType } from 'zod';
+import type { AgentContext } from '../context/index.js';
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -84,14 +85,13 @@ export interface Tool {
   name: string;
   description: string;
   parameters: ToolParameters;
-  execute: (args: unknown, ctx: unknown, options?: ToolExecutionOptions) => Promise<unknown>;
+  execute: (args: unknown, ctx: AgentContext, options?: ToolExecutionOptions) => Promise<unknown>;
 }
 
-export interface StreamChunk {
-  message: Partial<Message>;
-  usage?: TokenUsage;
-  delta?: string;
-}
+export type StreamEvent =
+  | { type: 'text'; delta: string; content: string }
+  | { type: 'tool_calls'; toolCalls: ToolCall[] }
+  | { type: 'usage'; usage: TokenUsage };
 
 export type RunStreamEvent =
   | { type: 'step_start'; step: number }

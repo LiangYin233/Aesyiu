@@ -1,5 +1,5 @@
 import Anthropic, { type ClientOptions as AnthropicClientOptions } from '@anthropic-ai/sdk';
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../../types/index.js';
 import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
@@ -25,6 +25,67 @@ function parseToolCallArguments(toolCall: { id: string; name: string; arguments:
       `Failed to parse assistant tool call arguments for "${toolCall.name}" (${toolCall.id})`,
       { cause: error },
     );
+  }
+}
+
+class StreamParser {
+  private content = '';
+  private toolCalls: { id: string; name: string; arguments: string }[] = [];
+  private currentToolId = '';
+  private currentToolName = '';
+  private currentToolInput = '';
+  private usage: TokenUsage | undefined;
+
+  consume(event: Anthropic.Messages.MessageStreamEvent): StreamEvent | undefined {
+    switch (event.type) {
+      case 'content_block_start':
+        if (event.content_block.type === 'tool_use') {
+          this.currentToolId = event.content_block.id;
+          this.currentToolName = event.content_block.name;
+          this.currentToolInput = '';
+        }
+        return undefined;
+      case 'content_block_delta':
+        if (event.delta.type === 'text_delta') {
+          this.content += event.delta.text;
+          return { type: 'text', delta: event.delta.text, content: this.content };
+        }
+        if (event.delta.type === 'input_json_delta') {
+          this.currentToolInput += event.delta.partial_json;
+        }
+        return undefined;
+      case 'content_block_stop':
+        if (this.currentToolId) {
+          this.toolCalls.push({
+            id: this.currentToolId,
+            name: this.currentToolName,
+            arguments: this.currentToolInput,
+          });
+          this.currentToolId = '';
+          this.currentToolName = '';
+          this.currentToolInput = '';
+        }
+        return undefined;
+      case 'message_delta':
+        if (event.usage) {
+          this.usage = {
+            promptTokens: event.usage.input_tokens ?? 0,
+            completionTokens: event.usage.output_tokens ?? 0,
+            totalTokens: (event.usage.input_tokens ?? 0) + (event.usage.output_tokens ?? 0),
+          };
+        }
+        return undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  getToolCalls(): { id: string; name: string; arguments: string }[] | undefined {
+    return this.toolCalls.length > 0 ? this.toolCalls : undefined;
+  }
+
+  getUsage(): TokenUsage | undefined {
+    return this.usage;
   }
 }
 
@@ -166,7 +227,7 @@ export class AnthropicProvider extends LLMProvider {
     messages: Message[],
     tools?: Tool[],
     options?: GenerateOptions,
-  ): AsyncGenerator<StreamChunk, void> {
+  ): AsyncGenerator<StreamEvent, void> {
     const modelDef = this.resolveModel(model);
     const { system, messages: sdkMessages } = this.toSDKMessages(messages);
     const params: Record<string, any> = {
@@ -188,53 +249,16 @@ export class AnthropicProvider extends LLMProvider {
       options?.signal ? { signal: options.signal } : undefined,
     );
 
-    let content = '';
-    const toolCalls: { id: string; name: string; arguments: string }[] = [];
-    let currentToolId = '';
-    let currentToolName = '';
-    let currentToolInput = '';
-    let finalUsage: TokenUsage | undefined;
+    const parser = new StreamParser();
 
     for await (const event of stream) {
-      if (event.type === 'content_block_start') {
-        if (event.content_block.type === 'tool_use') {
-          currentToolId = event.content_block.id;
-          currentToolName = event.content_block.name;
-          currentToolInput = '';
-        }
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          content += event.delta.text;
-          yield {
-            message: { role: 'assistant', content },
-            delta: event.delta.text,
-          };
-        } else if (event.delta.type === 'input_json_delta') {
-          currentToolInput += event.delta.partial_json;
-        }
-      } else if (event.type === 'content_block_stop') {
-        if (currentToolId) {
-          toolCalls.push({
-            id: currentToolId,
-            name: currentToolName,
-            arguments: currentToolInput,
-          });
-          currentToolId = '';
-          currentToolName = '';
-          currentToolInput = '';
-        }
-      } else if (event.type === 'message_delta') {
-        if (event.usage) {
-          finalUsage = {
-            promptTokens: event.usage.input_tokens ?? 0,
-            completionTokens: event.usage.output_tokens ?? 0,
-            totalTokens: (event.usage.input_tokens ?? 0) + (event.usage.output_tokens ?? 0),
-          };
-        }
-      }
+      const streamEvent = parser.consume(event);
+      if (streamEvent) yield streamEvent;
     }
 
-    const finalMessage = this.buildAssistantMessage(content, toolCalls);
-    yield { message: finalMessage, usage: finalUsage };
+    const toolCalls = parser.getToolCalls();
+    if (toolCalls) yield { type: 'tool_calls', toolCalls };
+    const usage = parser.getUsage();
+    if (usage) yield { type: 'usage', usage };
   }
 }

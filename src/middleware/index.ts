@@ -63,6 +63,15 @@ function defaultShouldRetry(error: unknown): boolean {
   return false;
 }
 
+async function doDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  try {
+    await sleep(ms, undefined, { signal });
+  } catch {
+    if (signal?.aborted) throw signal.reason;
+    throw new Error('Delay interrupted');
+  }
+}
+
 export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware {
   const maxRetries = options?.maxRetries ?? 2;
   const initialDelayMs = options?.initialDelayMs ?? 500;
@@ -83,14 +92,7 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
         if (ctx.options.signal?.aborted) {
           throw ctx.options.signal.reason ?? error;
         }
-        try {
-          await sleep(delay, undefined, { signal: ctx.options.signal });
-        } catch (sleepErr) {
-          if (ctx.options.signal?.aborted) {
-            throw ctx.options.signal.reason ?? sleepErr;
-          }
-          throw error;
-        }
+        await doDelay(delay, ctx.options.signal);
         attempt++;
         delay *= backoffFactor;
       }

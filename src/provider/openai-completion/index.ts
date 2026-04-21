@@ -1,6 +1,6 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions';
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../../types/index.js';
 import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
@@ -9,6 +9,59 @@ export const OPENAI_COMPLETION_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o-mini', contextWindow: 128000, maxOutputTokens: 16384 },
   { id: 'gpt-4-turbo', contextWindow: 128000, maxOutputTokens: 4096 },
 ];
+
+class StreamParser {
+  private content = '';
+  private toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+  private usage: TokenUsage | undefined;
+
+  consume(delta: OpenAI.ChatCompletionChunk.Choice.Delta): StreamEvent | undefined {
+    if (delta.content) {
+      this.content += delta.content;
+      return { type: 'text', delta: delta.content, content: this.content };
+    }
+
+    if (delta.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        const existing = this.toolCalls.get(tc.index);
+        if (!existing) {
+          this.toolCalls.set(tc.index, {
+            id: tc.id ?? '',
+            name: tc.function?.name ?? '',
+            arguments: tc.function?.arguments ?? '',
+          });
+        } else {
+          if (tc.id) existing.id = tc.id;
+          if (tc.function?.name) existing.name = tc.function.name;
+          if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  setUsage(usage: OpenAI.CompletionUsage | undefined): void {
+    if (usage) {
+      this.usage = {
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
+        totalTokens: usage.total_tokens ?? 0,
+      };
+    }
+  }
+
+  getToolCalls(): { id: string; name: string; arguments: string }[] | undefined {
+    if (this.toolCalls.size === 0) return undefined;
+    return Array.from(this.toolCalls.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, tc]) => tc);
+  }
+
+  getUsage(): TokenUsage | undefined {
+    return this.usage;
+  }
+}
 
 export class OpenAICompletionProvider extends LLMProvider {
   private client: OpenAI;
@@ -129,7 +182,7 @@ export class OpenAICompletionProvider extends LLMProvider {
     messages: Message[],
     tools?: Tool[],
     options?: GenerateOptions,
-  ): AsyncGenerator<StreamChunk, void> {
+  ): AsyncGenerator<StreamEvent, void> {
     const modelDef = this.resolveModel(model);
     const sdkMessages = this.toSDKMessages(messages);
     const params: Record<string, any> = {
@@ -149,47 +202,19 @@ export class OpenAICompletionProvider extends LLMProvider {
       options?.signal ? { signal: options.signal } : undefined,
     );
 
-    let content = '';
-    const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
-    let finalUsage: TokenUsage | undefined;
+    const parser = new StreamParser();
 
     for await (const chunk of stream) {
-      if (chunk.usage) {
-        finalUsage = {
-          promptTokens: chunk.usage.prompt_tokens ?? 0,
-          completionTokens: chunk.usage.completion_tokens ?? 0,
-          totalTokens: chunk.usage.total_tokens ?? 0,
-        };
-      }
-
+      parser.setUsage(chunk.usage ?? undefined);
       const delta = chunk.choices[0]?.delta;
-      if (!delta) {continue;}
-
-      if (delta.content) {
-        content += delta.content;
-        yield { message: { role: 'assistant', content }, delta: delta.content };
-      }
-
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const existing = toolCalls.get(tc.index);
-          if (!existing) {
-            toolCalls.set(tc.index, {
-              id: tc.id ?? '',
-              name: tc.function?.name ?? '',
-              arguments: tc.function?.arguments ?? '',
-            });
-          } else {
-            if (tc.id) {existing.id = tc.id;}
-            if (tc.function?.name) {existing.name = tc.function.name;}
-            if (tc.function?.arguments) {existing.arguments += tc.function.arguments;}
-          }
-        }
-      }
+      if (!delta) continue;
+      const event = parser.consume(delta);
+      if (event) yield event;
     }
 
-    const tcArray = Array.from(toolCalls.values());
-    const finalMessage = this.buildAssistantMessage(content, tcArray);
-    yield { message: finalMessage, usage: finalUsage };
+    const toolCalls = parser.getToolCalls();
+    if (toolCalls) yield { type: 'tool_calls', toolCalls };
+    const usage = parser.getUsage();
+    if (usage) yield { type: 'usage', usage };
   }
 }

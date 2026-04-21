@@ -76,7 +76,7 @@ async function runToolCall(
     const result = await chainMiddleware(
       toolMiddlewares,
       middlewareContext,
-      () => tool.execute(middlewareContext.args, ctx, { signal }) as Promise<unknown>,
+      () => tool.execute(middlewareContext.args, ctx, { signal }),
     );
 
     return {

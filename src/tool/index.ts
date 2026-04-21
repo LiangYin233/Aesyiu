@@ -9,5 +9,5 @@ export interface DefineToolConfig {
 }
 
 export function defineTool(config: DefineToolConfig): Tool {
-  return config as Tool;
+  return config;
 }
