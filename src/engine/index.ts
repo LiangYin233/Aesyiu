@@ -43,6 +43,47 @@ export type ToolMiddleware = (
   next: () => Promise<unknown>,
 ) => Promise<unknown>;
 
+export interface BeforeLLMRequestHookContext {
+  readonly model: ModelDefinition;
+  messages: Message[];
+  tools: Tool[];
+  options: GenerateOptions;
+  readonly agentContext: AgentContext;
+}
+
+export type BeforeLLMRequestHook = (
+  ctx: BeforeLLMRequestHookContext,
+) => void | Promise<void>;
+
+export interface BeforeToolCallHookContext {
+  readonly tool: Tool;
+  readonly toolCall: ToolCall;
+  args: unknown;
+  readonly agentContext: AgentContext;
+}
+
+export type BeforeToolCallHook = (
+  ctx: BeforeToolCallHookContext,
+) => void | Promise<void>;
+
+export interface AfterToolCallHookContext {
+  readonly tool: Tool;
+  readonly toolCall: ToolCall;
+  readonly args: unknown;
+  result: unknown;
+  readonly agentContext: AgentContext;
+}
+
+export type AfterToolCallHook = (
+  ctx: AfterToolCallHookContext,
+) => void | Promise<void>;
+
+export interface EngineHooks {
+  beforeLLMRequest?: BeforeLLMRequestHook;
+  beforeToolCall?: BeforeToolCallHook;
+  afterToolCall?: AfterToolCallHook;
+}
+
 export interface AesyiuEngineConfig {
   maxSteps?: number;
   memoryManager?: MemoryManager;
@@ -195,6 +236,9 @@ export class AesyiuEngine {
   private middlewares: Middleware[] = [];
   private llmMiddlewares: LLMMiddleware[] = [];
   private toolMiddlewares: ToolMiddleware[] = [];
+  private beforeLLMRequestHooks: BeforeLLMRequestHook[] = [];
+  private beforeToolCallHooks: BeforeToolCallHook[] = [];
+  private afterToolCallHooks: AfterToolCallHook[] = [];
   private maxSteps: number;
   private mcpManager: MCPManager;
   private memoryManager: MemoryManager;
@@ -220,6 +264,34 @@ export class AesyiuEngine {
 
   public useTool(middleware: ToolMiddleware): this {
     this.toolMiddlewares.push(middleware);
+    return this;
+  }
+
+  public useHooks(hooks: EngineHooks): this {
+    if (hooks.beforeLLMRequest) {
+      this.onBeforeLLMRequest(hooks.beforeLLMRequest);
+    }
+    if (hooks.beforeToolCall) {
+      this.onBeforeToolCall(hooks.beforeToolCall);
+    }
+    if (hooks.afterToolCall) {
+      this.onAfterToolCall(hooks.afterToolCall);
+    }
+    return this;
+  }
+
+  public onBeforeLLMRequest(hook: BeforeLLMRequestHook): this {
+    this.beforeLLMRequestHooks.push(hook);
+    return this;
+  }
+
+  public onBeforeToolCall(hook: BeforeToolCallHook): this {
+    this.beforeToolCallHooks.push(hook);
+    return this;
+  }
+
+  public onAfterToolCall(hook: AfterToolCallHook): this {
+    this.afterToolCallHooks.push(hook);
     return this;
   }
 
@@ -412,11 +484,12 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): Promise<{ message: Message; usage: TokenUsage }> {
+    const hookCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
     const mwCtx: LLMMiddlewareContext = {
       model: ctx.activeModel,
-      messages,
-      tools,
-      options: signal ? { signal } : {},
+      messages: hookCtx.messages,
+      tools: hookCtx.tools,
+      options: hookCtx.options,
       agentContext: ctx,
     };
 
@@ -440,11 +513,12 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): AsyncGenerator<RunStreamEvent, { message: Message; usage: TokenUsage }, void> {
+    const hookCtx = await this.applyBeforeLLMRequestHooks(ctx, messages, tools, signal);
     const mwCtx: LLMMiddlewareContext = {
       model: ctx.activeModel,
-      messages,
-      tools,
-      options: signal ? { signal } : {},
+      messages: hookCtx.messages,
+      tools: hookCtx.tools,
+      options: hookCtx.options,
       agentContext: ctx,
     };
 
@@ -559,19 +633,83 @@ export class AesyiuEngine {
     };
 
     try {
+      await this.applyBeforeToolCallHooks(mwCtx);
       const result = await chainMiddleware(
         this.toolMiddlewares,
         mwCtx,
         () => tool.execute(mwCtx.args as never, ctx) as Promise<unknown>,
       );
+      const finalResult = await this.applyAfterToolCallHooks({
+        tool,
+        toolCall: call,
+        args: mwCtx.args,
+        result,
+        agentContext: ctx,
+      });
       return {
         role: 'tool',
-        content: encodeEnvelope({ success: true, result }),
+        content: encodeEnvelope({ success: true, result: finalResult }),
         tool_call_id: call.id,
       };
     } catch (err) {
       return this.toolFailureMessage(call, (err as Error).message);
     }
+  }
+
+  private async applyBeforeLLMRequestHooks(
+    ctx: AgentContext,
+    messages: Message[],
+    tools: Tool[],
+    signal: AbortSignal | undefined,
+  ): Promise<BeforeLLMRequestHookContext> {
+    const hookCtx: BeforeLLMRequestHookContext = {
+      model: ctx.activeModel,
+      messages: [...messages],
+      tools: [...tools],
+      options: signal ? { signal } : {},
+      agentContext: ctx,
+    };
+
+    for (const hook of this.beforeLLMRequestHooks) {
+      await hook(hookCtx);
+    }
+
+    return hookCtx;
+  }
+
+  private async applyBeforeToolCallHooks(ctx: ToolMiddlewareContext): Promise<void> {
+    if (this.beforeToolCallHooks.length === 0) return;
+
+    const hookCtx: BeforeToolCallHookContext = {
+      tool: ctx.tool,
+      toolCall: ctx.toolCall,
+      args: ctx.args,
+      agentContext: ctx.agentContext,
+    };
+
+    for (const hook of this.beforeToolCallHooks) {
+      await hook(hookCtx);
+    }
+
+    ctx.args = hookCtx.args;
+  }
+
+  private async applyAfterToolCallHooks(ctx: AfterToolCallHookContext): Promise<unknown> {
+    if (this.afterToolCallHooks.length === 0) return ctx.result;
+
+    const hookCtx: AfterToolCallHookContext = {
+      tool: ctx.tool,
+      toolCall: ctx.toolCall,
+      args: ctx.args,
+      result: ctx.result,
+      agentContext: ctx.agentContext,
+    };
+
+    for (const hook of this.afterToolCallHooks) {
+      await hook(hookCtx);
+    }
+
+    return hookCtx.result;
   }
 
   private toolFailureMessage(call: ToolCall, error: string): Message {

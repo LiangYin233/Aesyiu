@@ -234,6 +234,30 @@ engine
   .useLLM(timeoutMiddleware({ ms: 30_000 }));  // AbortSignal 真正传递到 SDK
 ```
 
+### 3. Hooks
+
+轻量场景可以直接挂内建 hook，不需要自己包装 middleware：
+
+```typescript
+engine
+  .onBeforeLLMRequest((request) => {
+    if (request.tools.length === 0) return;
+    request.messages = [...request.messages];
+  })
+  .onBeforeToolCall(({ tool, args }) => {
+    console.log('calling tool', tool.name, args);
+  })
+  .onAfterToolCall(({ tool, result }) => {
+    console.log('tool result', tool.name, result);
+  });
+
+engine.useHooks({
+  beforeLLMRequest({ options }) {
+    options.signal ??= AbortSignal.timeout(30_000);
+  },
+});
+```
+
 自定义：
 
 ```typescript

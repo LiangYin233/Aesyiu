@@ -38,6 +38,13 @@ export type {
   LLMMiddlewareContext,
   ToolMiddleware,
   ToolMiddlewareContext,
+  EngineHooks,
+  BeforeLLMRequestHook,
+  BeforeLLMRequestHookContext,
+  BeforeToolCallHook,
+  BeforeToolCallHookContext,
+  AfterToolCallHook,
+  AfterToolCallHookContext,
   RunOptions,
   AesyiuEngineConfig,
 } from './engine/index.js';
