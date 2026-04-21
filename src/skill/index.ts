@@ -1,7 +1,7 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { Message, Tool } from '../types/index.js';
+import type { Tool } from '../types/index.js';
 
 export type SkillMetadataScalar = string | number | boolean | null;
 export type SkillMetadataValue = SkillMetadataScalar | SkillMetadataScalar[];
@@ -314,25 +314,6 @@ export function renderSkillsPrompt(skills: readonly AgentSkill[]): string {
     listing,
     'If a task matches one of these skills, call `loadskill` with the skill name before using that skill.',
   ].join('\n');
-}
-
-export function createSkillsPromptMessage(skills: readonly AgentSkill[]): Message | null {
-  const content = renderSkillsPrompt(skills);
-
-  if (!content) {
-    return null;
-  }
-
-  return {
-    role: 'system',
-    content,
-    _meta: {
-      isPinned: true,
-      skillPrompt: true,
-      internal: true,
-      promptSection: 'aesyiu:skills',
-    },
-  };
 }
 
 export function createLoadSkillTool(skills: readonly AgentSkill[]): Tool {

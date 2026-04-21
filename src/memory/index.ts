@@ -91,7 +91,7 @@ export class MemoryManager {
 
     return {
       role: 'system',
-      content: `[Summary of earlier conversation] ${message.content}`,
+      content: `[Summary of earlier conversation] ${message.content ?? ''}`,
       _meta: { isPinned: false },
     };
   }

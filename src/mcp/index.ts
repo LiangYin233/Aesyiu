@@ -181,11 +181,15 @@ export class MCPManager {
       name: namespaceMCPToolName(serverName, tool.name),
       description: tool.description ?? `MCP tool ${tool.name}`,
       parameters: tool.inputSchema,
-      execute: async (args) => {
-        const result = await client.callTool({
-          name: tool.name,
-          arguments: ensureObjectArguments(args),
-        });
+      execute: async (args, _ctx, options) => {
+        const result = await client.callTool(
+          {
+            name: tool.name,
+            arguments: ensureObjectArguments(args),
+          },
+          undefined,
+          options?.signal ? { signal: options.signal } : undefined,
+        );
 
         return normalizeToolResult(result);
       },

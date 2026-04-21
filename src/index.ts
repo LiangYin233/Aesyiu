@@ -11,13 +11,14 @@ export type {
   EngineResult,
   EngineResultStatus,
   Tool,
+  ToolExecutionOptions,
   ToolParameters,
   ToolResultEnvelope,
   JSONSchema,
   StreamChunk,
   RunStreamEvent,
 } from './types/index.js';
-export { AgentContext } from './context/index.js';
+export { AgentContext, filterVisibleMessages } from './context/index.js';
 export type { AgentContextConfig, MessageInput, MessagePatch, PromptSection } from './context/index.js';
 export { LLMProvider } from './provider/index.js';
 export type { GenerateOptions } from './provider/index.js';
@@ -27,11 +28,11 @@ export { MemoryManager } from './memory/index.js';
 export type { MemoryManagerConfig, MemoryLLMFn } from './memory/index.js';
 export { MCPManager, namespaceMCPToolName } from './mcp/index.js';
 export type { MCPServerConfig, MCPServerStatus } from './mcp/index.js';
-export { loadSkill, loadSkills, renderSkillsPrompt, createLoadSkillTool, createSkillsPromptMessage } from './skill/index.js';
+export { loadSkill, loadSkills, renderSkillsPrompt, createLoadSkillTool } from './skill/index.js';
 export type { AgentSkill, SkillMetadata, SkillMetadataScalar, SkillMetadataValue, SkillResourcePaths } from './skill/index.js';
-export { ToolExecutor, defineTool } from './tool/index.js';
+export { defineTool } from './tool/index.js';
 export type { DefineToolConfig } from './tool/index.js';
-export { AesyiuEngine, isAbortError, filterVisibleMessages } from './engine/index.js';
+export { AesyiuEngine, isAbortError } from './engine/index.js';
 export type {
   Middleware,
   LLMMiddleware,

@@ -76,11 +76,15 @@ export type JSONSchema = {
 
 export type ToolParameters = ZodType<unknown, unknown> | JSONSchema;
 
+export interface ToolExecutionOptions {
+  signal?: AbortSignal;
+}
+
 export interface Tool<TArgs = unknown, TResult = unknown, TCtx = unknown> {
   name: string;
   description: string;
   parameters: ToolParameters;
-  execute: (args: TArgs, ctx: TCtx) => Promise<TResult>;
+  execute: (args: TArgs, ctx: TCtx, options?: ToolExecutionOptions) => Promise<TResult>;
 }
 
 export interface StreamChunk {

@@ -82,7 +82,10 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
         }
         try {
           await sleep(delay, undefined, { signal: ctx.options.signal });
-        } catch {
+        } catch (sleepErr) {
+          if (ctx.options.signal?.aborted) {
+            throw ctx.options.signal.reason ?? sleepErr;
+          }
           throw error;
         }
         attempt++;

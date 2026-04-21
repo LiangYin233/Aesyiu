@@ -1,11 +1,11 @@
 import type { AgentContext } from '../context/index.js';
+import { filterVisibleMessages } from '../context/index.js';
 import type {
   Message,
   ModelDefinition,
   Tool,
   TokenUsage,
   ToolCall,
-  ToolResultEnvelope,
   EngineErrorSource,
   EngineResult,
   RunStreamEvent,
@@ -14,7 +14,9 @@ import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/index.js';
 import { createLoadSkillTool, renderSkillsPrompt, type AgentSkill } from '../skill/index.js';
 import type { GenerateOptions } from '../provider/index.js';
-import { validateToolArguments } from '../tool/schema.js';
+import { encodeToolResultEnvelope, validateToolArguments, warnIfJSONSchemaTool } from '../tool/schema.js';
+
+export { filterVisibleMessages } from '../context/index.js';
 
 export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
 
@@ -99,10 +101,6 @@ export interface RunOptions {
 
 const SKILL_PROMPT_SECTION = 'aesyiu:skills';
 
-function encodeEnvelope<T>(envelope: ToolResultEnvelope<T>): string {
-  return JSON.stringify(envelope);
-}
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -135,10 +133,6 @@ class EngineDiagnosticError extends Error {
 
 function getErrorSource(error: unknown): EngineErrorSource | undefined {
   return error instanceof EngineDiagnosticError ? error.source : undefined;
-}
-
-export function filterVisibleMessages(messages: readonly Message[]): Message[] {
-  return messages.filter((message) => !message._meta?.internal);
 }
 
 async function chainMiddleware<TCtx, TResult>(
@@ -299,8 +293,10 @@ export class AesyiuEngine {
 
   public registerSkills(skills: AgentSkill[]): this {
     if (skills.length === 0) {
-      this.registeredSkills = [];
-      this.globalTools.delete('loadskill');
+      if (this.registeredSkills.length > 0) {
+        this.globalTools.delete('loadskill');
+        this.registeredSkills = [];
+      }
       return this;
     }
 
@@ -409,7 +405,7 @@ export class AesyiuEngine {
       step++;
 
       if (signal?.aborted) {
-        return this.createAbortedResult(ctx);
+        return this.createAbortedResult(ctx, signal);
       }
 
       yield { type: 'step_start', step };
@@ -470,7 +466,6 @@ export class AesyiuEngine {
 
     return this.createResult('max_steps_reached', ctx);
   }
-
   private async llmStep(
     ctx: AgentContext,
     messages: Message[],
@@ -488,8 +483,8 @@ export class AesyiuEngine {
 
     const core = async () => ctx.activeProvider.generate(
       ctx.activeModel,
-      messages,
-      tools,
+      mwCtx.messages,
+      mwCtx.tools,
       mwCtx.options,
     );
 
@@ -520,8 +515,8 @@ export class AesyiuEngine {
     const core = async (): Promise<{ message: Message; usage: TokenUsage }> => {
       const stream = ctx.activeProvider.generateStream(
         ctx.activeModel,
-        messages,
-        tools,
+        mwCtx.messages,
+        mwCtx.tools,
         mwCtx.options,
       );
 
@@ -586,7 +581,7 @@ export class AesyiuEngine {
   ): Promise<Message[]> {
     try {
       return await Promise.all(
-        (toolCalls ?? []).map((call) => this.runToolWithMiddleware(call, availableTools, ctx)),
+        (toolCalls ?? []).map((call) => this.runToolWithMiddleware(call, availableTools, ctx, signal)),
       );
     } catch (error) {
       throw this.createDiagnosticError(isAbortError(error, signal) ? 'aborted' : 'tool', error);
@@ -597,11 +592,14 @@ export class AesyiuEngine {
     call: ToolCall,
     availableTools: Map<string, Tool>,
     ctx: AgentContext,
+    signal: AbortSignal | undefined,
   ): Promise<Message> {
     const tool = availableTools.get(call.name);
     if (!tool) {
       return this.toolFailureMessage(call, `Tool "${call.name}" not found`);
     }
+
+    warnIfJSONSchemaTool(tool);
 
     let parsedArgs: unknown;
     try {
@@ -628,7 +626,7 @@ export class AesyiuEngine {
       const result = await chainMiddleware(
         this.toolMiddlewares,
         mwCtx,
-        () => tool.execute(mwCtx.args as never, ctx) as Promise<unknown>,
+        () => tool.execute(mwCtx.args as never, ctx, { signal }) as Promise<unknown>,
       );
       const finalResult = await this.applyAfterToolCallHooks({
         tool,
@@ -639,10 +637,11 @@ export class AesyiuEngine {
       });
       return {
         role: 'tool',
-        content: encodeEnvelope({ success: true, result: finalResult }),
+        content: encodeToolResultEnvelope({ success: true, result: finalResult }),
         tool_call_id: call.id,
       };
     } catch (err) {
+      if (isAbortError(err, signal)) throw err;
       return this.toolFailureMessage(call, (err as Error).message);
     }
   }
@@ -706,7 +705,7 @@ export class AesyiuEngine {
   private toolFailureMessage(call: ToolCall, error: string): Message {
     return {
       role: 'tool',
-      content: encodeEnvelope({ success: false, error }),
+      content: encodeToolResultEnvelope({ success: false, error }),
       tool_call_id: call.id,
     };
   }
@@ -743,14 +742,18 @@ export class AesyiuEngine {
     };
   }
 
-  private createAbortedResult(ctx: AgentContext): EngineResult {
+  private createAbortedResult(ctx: AgentContext, signal?: AbortSignal): EngineResult {
+    const reason = signal?.reason;
+    const message = reason instanceof Error ? reason.message
+      : typeof reason === 'string' ? reason
+      : 'Run aborted';
     const snapshot = [...ctx.messages];
     return {
       status: 'error',
       messages: snapshot,
       visibleMessages: filterVisibleMessages(snapshot),
       usage: ctx.sessionUsage,
-      error: { message: 'Run aborted', source: 'aborted' },
+      error: { message, source: 'aborted' },
     };
   }
 
@@ -806,7 +809,6 @@ export class AesyiuEngine {
     const content = renderSkillsPrompt(skills);
     if (!content) {
       ctx.removePromptSection(SKILL_PROMPT_SECTION);
-      ctx.removeMessages((message) => message._meta?.skillPrompt === true);
       return;
     }
 

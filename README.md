@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/npm/v/aesyiu" alt="npm version" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" />
-  <img src="https://img.shields.io/badge/Node-%3E=20-339933" alt="Node 20+" />
+  <img src="https://img.shields.io/badge/Node-%3E=22-339933" alt="Node 22+" />
   <img src="https://img.shields.io/badge/Skills-Support-7C3AED" alt="Skill System" />
   <img src="https://img.shields.io/badge/MCP-Support-0A7EA4" alt="MCP Ready" />
 </p>
@@ -28,7 +28,7 @@
 
 ## 环境要求
 
-- Node.js **≥ 20**（用到 `AbortSignal.any` / `node:timers/promises`）
+- Node.js **≥ 22**（用到 `Object.groupBy` / Iterator helpers / `AbortSignal.any` / `node:timers/promises`）
 - TypeScript **≥ 5.6** 使用方（如需 `await using` 语法）
 
 ## 安装
@@ -195,7 +195,7 @@ engine.registerTool(calculator);
 
 `Tool.parameters` 接受 `ZodType | JSONSchema`：
 - **Zod**：运行时自动 `safeParse` 校验，并在发给 provider 时自动转换成 JSON Schema
-- **JSONSchema**：透传给 provider，**不做运行时校验**（ToolExecutor 会 `console.warn` 一次）
+- **JSONSchema**：透传给 provider，**不做运行时校验**（引擎首次调用该工具时 `console.warn` 一次）
 
 ### 过滤运行时工具
 

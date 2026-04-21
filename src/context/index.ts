@@ -16,6 +16,10 @@ export interface PromptSection {
   pinned?: boolean;
 }
 
+export function filterVisibleMessages(messages: readonly Message[]): Message[] {
+  return messages.filter((message) => !message._meta?.internal);
+}
+
 export class AgentContext<TState extends Record<string, unknown> = Record<string, unknown>> {
   private _messages: Message[] = [];
   public state: TState;
@@ -49,12 +53,8 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     this.sessionUsage.totalTokens += usage.totalTokens;
   }
 
-  public getMessages(): readonly Message[] {
-    return this._messages;
-  }
-
   public getVisibleMessages(): Message[] {
-    return this._messages.filter((message) => !message._meta?.internal);
+    return filterVisibleMessages(this._messages);
   }
 
   public addMessage(message: MessageInput): Message {
