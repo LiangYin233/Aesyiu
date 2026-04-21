@@ -43,14 +43,15 @@ npm install aesyiu
 import {
   AesyiuEngine,
   AgentContext,
-  AnthropicProvider,
-  ANTHROPIC_MODELS,
+  createLLMProvider,
+  getDefaultModels,
 } from 'aesyiu';
 
-const provider = new AnthropicProvider(
-  { apiKey: process.env.ANTHROPIC_API_KEY! },
-  ANTHROPIC_MODELS,
-);
+const provider = createLLMProvider({
+  type: 'anthropic',
+  config: { apiKey: process.env.ANTHROPIC_API_KEY! },
+  models: getDefaultModels('anthropic'),
+});
 
 const ctx = new AgentContext({ provider, modelId: 'claude-sonnet-4-6' });
 const engine = new AesyiuEngine({ maxSteps: 10 });
@@ -73,19 +74,34 @@ if (result.status === 'error') {
 
 ```typescript
 import {
-  AnthropicProvider, ANTHROPIC_MODELS,
-  OpenAIResponsesProvider, OPENAI_RESPONSES_MODELS,
-  OpenAICompletionProvider, OPENAI_COMPLETION_MODELS,
+  createLLMProvider,
+  getDefaultModel,
+  getDefaultModels,
 } from 'aesyiu';
 
 // Anthropic Claude — 包含 Opus 4.7 / Sonnet 4.6 / Haiku 4.5
-const claude = new AnthropicProvider({ apiKey }, ANTHROPIC_MODELS);
+const claude = createLLMProvider({
+  type: 'anthropic',
+  config: { apiKey },
+  models: getDefaultModels('anthropic'),
+});
 
 // OpenAI Responses API（新接口，支持 reasoning）
-const oa = new OpenAIResponsesProvider({ apiKey }, OPENAI_RESPONSES_MODELS);
+const oa = createLLMProvider({
+  type: 'openai-responses',
+  config: { apiKey },
+  models: getDefaultModels('openai-responses'),
+});
 
 // OpenAI Chat Completions（经典接口）
-const oac = new OpenAICompletionProvider({ apiKey }, OPENAI_COMPLETION_MODELS);
+const oac = createLLMProvider({
+  type: 'openai-completion',
+  config: { apiKey },
+  models: getDefaultModels('openai-completion'),
+});
+
+// 精确拿一个内建模型定义
+const sonnet = getDefaultModel('anthropic', 'claude-sonnet-4-6');
 ```
 
 **动态注册 model / 传 inline definition**：
