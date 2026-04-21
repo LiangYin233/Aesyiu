@@ -19,7 +19,6 @@ export interface MCPServerConfig extends Pick<StdioServerParameters, 'args' | 'c
 
 export interface MCPServerStatus {
   name: string;
-  /** True if this server is currently registered with the manager. The child process could still be dead; connection health is not actively probed. */
   registered: boolean;
   toolNames: string[];
 }
@@ -135,7 +134,7 @@ export class MCPManager {
       }
     } catch (error) {
       for (const name of registered) {
-        await this.unregisterServer(name).catch(() => { /* best-effort rollback */ });
+        await this.unregisterServer(name).catch(() => {});
       }
       throw error;
     }
@@ -161,24 +160,18 @@ export class MCPManager {
   public getServer(name: string): MCPServerStatus | undefined {
     const server = this.servers.get(name);
     if (!server) return undefined;
-    return { name, registered: true, toolNames: [...server.tools] };
+    return this.toServerStatus(name, server);
   }
 
   public listServers(): MCPServerStatus[] {
-    return this.servers.entries().map(([name, server]) => ({
-      name,
-      registered: true,
-      toolNames: [...server.tools],
-    })).toArray();
+    return Array.from(this.servers.entries(), ([name, server]) => this.toServerStatus(name, server));
   }
 
   public async dispose(): Promise<void> {
-    const servers = this.servers.values().toArray();
+    const servers = Array.from(this.servers.values());
     this.servers.clear();
 
-    await Promise.all(servers.map(async (server) => {
-      await this.safeClose(server.client);
-    }));
+    await Promise.all(servers.map((server) => this.safeClose(server.client)));
   }
 
   public async [Symbol.asyncDispose](): Promise<void> {
@@ -205,11 +198,14 @@ export class MCPManager {
     };
   }
 
+  private toServerStatus(name: string, server: RegisteredMCPServer): MCPServerStatus {
+    return { name, registered: true, toolNames: [...server.tools] };
+  }
+
   private async safeClose(client: Client): Promise<void> {
     try {
       await client.close();
     } catch {
-      // Best-effort cleanup for partially initialized clients.
     }
   }
 }

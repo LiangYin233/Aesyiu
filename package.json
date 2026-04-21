@@ -1,6 +1,6 @@
 {
   "name": "aesyiu",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "description": "Stateless, high-concurrency AI Agent framework with onion-model middleware and dynamic LLM switching",
   "license": "MIT",
   "engines": {
@@ -27,6 +27,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "front-matter": "^4.0.2",
     "openai": "^6.34.0",
     "zod": "^4.3.6"
   },

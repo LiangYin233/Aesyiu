@@ -90,7 +90,6 @@ export interface Tool<TArgs = unknown, TResult = unknown, TCtx = unknown> {
 export interface StreamChunk {
   message: Partial<Message>;
   usage?: TokenUsage;
-  /** Incremental text produced by this chunk. `message.content` remains the cumulative text. */
   delta?: string;
 }
 

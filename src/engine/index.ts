@@ -175,6 +175,13 @@ function composeUserMiddleware(
   };
 }
 
+async function consumeGenerator<TResult>(gen: AsyncGenerator<unknown, TResult, void>): Promise<TResult> {
+  while (true) {
+    const next = await gen.next();
+    if (next.done) return next.value;
+  }
+}
+
 class AsyncQueue<T> {
   private items: T[] = [];
   private waiters: Array<(v: IteratorResult<T, void>) => void> = [];
@@ -215,7 +222,7 @@ class AsyncQueue<T> {
 
 export class AesyiuEngine {
   private globalTools: Map<string, Tool> = new Map();
-  private mcpToolNames: Set<string> = new Set();
+  private mcpTools: Map<string, Tool> = new Map();
   private middlewares: Middleware[] = [];
   private llmMiddlewares: LLMMiddleware[] = [];
   private toolMiddlewares: ToolMiddleware[] = [];
@@ -229,6 +236,9 @@ export class AesyiuEngine {
   private compatibilityMode: boolean;
 
   constructor(config?: AesyiuEngineConfig) {
+    if (config?.memoryManager && config.memoryConfig) {
+      throw new Error('Provide either memoryManager or memoryConfig, not both');
+    }
     this.maxSteps = config?.maxSteps ?? 10;
     this.mcpManager = new MCPManager();
     this.memoryManager = config?.memoryManager ?? new MemoryManager(config?.memoryConfig);
@@ -284,7 +294,7 @@ export class AesyiuEngine {
   }
 
   public getTools(): Tool[] {
-    return this.globalTools.values().toArray();
+    return Array.from(this.globalTools.values());
   }
 
   public registerSkills(skills: AgentSkill[]): this {
@@ -310,7 +320,7 @@ export class AesyiuEngine {
 
     for (const tool of tools) {
       this.globalTools.set(tool.name, tool);
-      this.mcpToolNames.add(tool.name);
+      this.mcpTools.set(tool.name, tool);
     }
 
     return this;
@@ -325,7 +335,7 @@ export class AesyiuEngine {
       }
     } catch (error) {
       for (const name of registered) {
-        await this.unregisterMCPServer(name).catch(() => { /* best-effort rollback */ });
+        await this.unregisterMCPServer(name).catch(() => {});
       }
       throw error;
     }
@@ -337,8 +347,11 @@ export class AesyiuEngine {
     const toolNames = await this.mcpManager.unregisterServer(name);
 
     for (const toolName of toolNames) {
-      this.globalTools.delete(toolName);
-      this.mcpToolNames.delete(toolName);
+      const recorded = this.mcpTools.get(toolName);
+      this.mcpTools.delete(toolName);
+      if (recorded && this.globalTools.get(toolName) === recorded) {
+        this.globalTools.delete(toolName);
+      }
     }
 
     return this;
@@ -351,11 +364,13 @@ export class AesyiuEngine {
   public async dispose(): Promise<void> {
     await this.mcpManager.dispose();
 
-    for (const toolName of this.mcpToolNames) {
-      this.globalTools.delete(toolName);
+    for (const [toolName, recorded] of this.mcpTools) {
+      if (this.globalTools.get(toolName) === recorded) {
+        this.globalTools.delete(toolName);
+      }
     }
 
-    this.mcpToolNames.clear();
+    this.mcpTools.clear();
   }
 
   public async [Symbol.asyncDispose](): Promise<void> {
@@ -363,18 +378,11 @@ export class AesyiuEngine {
   }
 
   public async run(input: Message, ctx: AgentContext, options?: RunOptions): Promise<EngineResult> {
-    this.prepareRun(input, ctx, options);
-
-    const availableTools = this.resolveRunTools(options);
-    const signal = options?.signal;
-
-    const runner = composeUserMiddleware(this.middlewares, async (c) => {
-      const gen = this.coreReactLoop(c, availableTools, signal, false);
-      while (true) {
-        const n = await gen.next();
-        if (n.done) return n.value;
-      }
-    });
+    const { availableTools, signal } = this.prepareRun(input, ctx, options);
+    const runner = composeUserMiddleware(
+      this.middlewares,
+      (c) => consumeGenerator(this.coreReactLoop(c, availableTools, signal, false)),
+    );
     return runner(ctx);
   }
 
@@ -383,13 +391,18 @@ export class AesyiuEngine {
     ctx: AgentContext,
     options?: RunOptions,
   ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
-    this.prepareRun(input, ctx, options);
-
-    const availableTools = this.resolveRunTools(options);
-    const signal = options?.signal;
+    const { availableTools, signal: externalSignal } = this.prepareRun(input, ctx, options);
+    const internalAbort = new AbortController();
+    const signal = externalSignal
+      ? AbortSignal.any([externalSignal, internalAbort.signal])
+      : internalAbort.signal;
 
     if (this.middlewares.length === 0) {
-      return yield* this.coreReactLoop(ctx, availableTools, signal, true);
+      try {
+        return yield* this.coreReactLoop(ctx, availableTools, signal, true);
+      } finally {
+        internalAbort.abort();
+      }
     }
 
     const eventQueue = new AsyncQueue<RunStreamEvent>();
@@ -414,19 +427,27 @@ export class AesyiuEngine {
       }
     })();
 
-    for await (const event of eventQueue.drain()) {
-      yield event;
+    try {
+      for await (const event of eventQueue.drain()) {
+        yield event;
+      }
+      await runnerPromise;
+      if (runnerError) throw runnerError;
+      return finalResult!;
+    } finally {
+      internalAbort.abort();
+      await runnerPromise.catch(() => {});
     }
-
-    await runnerPromise;
-    if (runnerError) throw runnerError;
-    return finalResult!;
   }
 
-  private prepareRun(input: Message, ctx: AgentContext, options?: RunOptions): void {
-    const visibleSkills = this.resolveRunSkills(options);
-    this.injectSkillPrompt(ctx, visibleSkills);
+  private prepareRun(input: Message, ctx: AgentContext, options?: RunOptions): {
+    availableTools: Map<string, Tool>;
+    signal: AbortSignal | undefined;
+  } {
+    const availableTools = this.resolveRunTools(options);
+    this.injectSkillPrompt(ctx, this.resolveRunSkills(options));
     ctx.addMessage(input);
+    return { availableTools, signal: options?.signal };
   }
 
   private async *coreReactLoop(
@@ -435,7 +456,7 @@ export class AesyiuEngine {
     signal: AbortSignal | undefined,
     emitStream: boolean,
   ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
-    const tools = availableTools.values().toArray();
+    const tools = Array.from(availableTools.values());
     let step = 0;
 
     while (step < this.maxSteps) {
@@ -583,9 +604,6 @@ export class AesyiuEngine {
       }
     })();
 
-    let resultError: unknown;
-    resultPromise.catch((err) => { resultError = err; });
-
     for await (const event of queue.drain()) {
       yield event;
     }
@@ -594,23 +612,31 @@ export class AesyiuEngine {
       return await resultPromise;
     } catch (error) {
       throw new EngineDiagnosticError(
-        classifyAbortOrTimeout(resultError ?? error, signal) ?? 'provider',
+        classifyAbortOrTimeout(error, signal) ?? 'provider',
         error,
       );
     }
   }
 
   private async runTools(
-    toolCalls: Message['tool_calls'],
+    toolCalls: ToolCall[],
     availableTools: Map<string, Tool>,
     ctx: AgentContext,
     signal: AbortSignal | undefined,
   ): Promise<Message[]> {
+    const toolAbort = new AbortController();
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, toolAbort.signal])
+      : toolAbort.signal;
+
+    const promises = toolCalls.map((call) =>
+      this.runToolWithMiddleware(call, availableTools, ctx, combinedSignal),
+    );
     try {
-      return await Promise.all(
-        (toolCalls ?? []).map((call) => this.runToolWithMiddleware(call, availableTools, ctx, signal)),
-      );
+      return await Promise.all(promises);
     } catch (error) {
+      toolAbort.abort();
+      await Promise.allSettled(promises);
       throw new EngineDiagnosticError(classifyAbortOrTimeout(error, signal) ?? 'tool', error);
     }
   }
@@ -632,7 +658,7 @@ export class AesyiuEngine {
     try {
       parsedArgs = JSON.parse(call.arguments);
     } catch (err) {
-      return this.toolFailureMessage(call, (err as Error).message);
+      return this.toolFailureMessage(call, getErrorMessage(err));
     }
 
     const validation = validateToolArguments(tool.parameters, parsedArgs);
@@ -669,7 +695,7 @@ export class AesyiuEngine {
       };
     } catch (err) {
       if (isAbortError(err, signal)) throw err;
-      return this.toolFailureMessage(call, (err as Error).message);
+      return this.toolFailureMessage(call, getErrorMessage(err));
     }
   }
 
@@ -679,32 +705,28 @@ export class AesyiuEngine {
     tools: Tool[],
     signal: AbortSignal | undefined,
   ): Promise<LLMMiddlewareContext> {
-    const mwCtx: LLMMiddlewareContext = {
+    return this.runHooks(this.beforeLLMRequestHooks, {
       model: ctx.activeModel,
       messages,
       tools,
       options: signal ? { signal } : {},
       agentContext: ctx,
-    };
-
-    for (const hook of this.beforeLLMRequestHooks) {
-      await hook(mwCtx);
-    }
-
-    return mwCtx;
+    });
   }
 
   private async applyBeforeToolCallHooks(ctx: ToolMiddlewareContext): Promise<void> {
-    for (const hook of this.beforeToolCallHooks) {
-      await hook(ctx);
-    }
+    await this.runHooks(this.beforeToolCallHooks, ctx);
   }
 
   private async applyAfterToolCallHooks(ctx: AfterToolCallHookContext): Promise<unknown> {
-    for (const hook of this.afterToolCallHooks) {
+    return (await this.runHooks(this.afterToolCallHooks, ctx)).result;
+  }
+
+  private async runHooks<T>(hooks: ReadonlyArray<(ctx: T) => void | Promise<void>>, ctx: T): Promise<T> {
+    for (const hook of hooks) {
       await hook(ctx);
     }
-    return ctx.result;
+    return ctx;
   }
 
   private toolFailureMessage(call: ToolCall, error: string): Message {
@@ -716,30 +738,33 @@ export class AesyiuEngine {
   }
 
   private createResult(status: 'completed' | 'max_steps_reached', ctx: AgentContext): EngineResult {
-    const snapshot = [...ctx.messages];
     return {
       status,
-      messages: snapshot,
-      visibleMessages: filterVisibleMessages(snapshot),
-      usage: ctx.sessionUsage,
+      ...this.createResultBase(ctx),
     };
   }
 
   private createErrorResult(ctx: AgentContext, error: unknown, fallbackSource: EngineErrorSource): EngineResult {
     const source = getErrorSource(error) ?? fallbackSource;
     const cause = getCauseString(error instanceof EngineDiagnosticError ? error.cause : error);
-    const snapshot = [...ctx.messages];
 
     return {
       status: 'error',
-      messages: snapshot,
-      visibleMessages: filterVisibleMessages(snapshot),
-      usage: ctx.sessionUsage,
+      ...this.createResultBase(ctx),
       error: {
         message: getErrorMessage(error),
         source,
         ...(cause ? { cause } : {}),
       },
+    };
+  }
+
+  private createResultBase(ctx: AgentContext): Pick<EngineResult, 'messages' | 'visibleMessages' | 'usage'> {
+    const messages = [...ctx.messages];
+    return {
+      messages,
+      visibleMessages: filterVisibleMessages(messages),
+      usage: ctx.sessionUsage,
     };
   }
 

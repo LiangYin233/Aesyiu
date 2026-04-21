@@ -1,6 +1,8 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import path from 'node:path';
+import frontMatter from 'front-matter';
+import type { FrontMatterResult } from 'front-matter';
 import { z } from 'zod';
 import type { Tool } from '../types/index.js';
 
@@ -33,130 +35,59 @@ const SKILL_FILE_NAME = 'SKILL.md';
 const OPTIONAL_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
 const LOAD_SKILL_TOOL_NAME = 'loadskill';
 
-function stripQuotes(value: string): string {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-
-  return value;
+function isSkillMetadataScalar(value: unknown): value is SkillMetadataScalar {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
 }
 
-function parseScalar(value: string): SkillMetadataScalar {
-  const trimmed = value.trim();
-
-  if (trimmed === 'null') {
-    return null;
+function toSkillMetadataValue(key: string, value: unknown): SkillMetadataValue {
+  if (isSkillMetadataScalar(value)) {
+    return value;
   }
-
-  if (trimmed === 'true') {
-    return true;
+  if (Array.isArray(value) && value.every(isSkillMetadataScalar)) {
+    return value;
   }
-
-  if (trimmed === 'false') {
-    return false;
-  }
-
-  if (/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) {
-    return Number(trimmed);
-  }
-
-  return stripQuotes(trimmed);
+  throw new Error(`Skill frontmatter field "${key}" must be a scalar or scalar array in ${SKILL_FILE_NAME}`);
 }
 
-function parseFrontmatter(frontmatter: string): Record<string, SkillMetadataValue> {
-  const parsed: Record<string, SkillMetadataValue> = {};
-  const lines = frontmatter.split('\n');
+function normalizeMetadata(attributes: Record<string, unknown>): Record<string, SkillMetadataValue> {
+  return Object.fromEntries(
+    Object.entries(attributes).map(([key, value]) => [key, toSkillMetadataValue(key, value)]),
+  );
+}
 
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index];
-    const trimmed = line.trim();
-
-    if (trimmed === '' || trimmed.startsWith('#')) {
-      index++;
-      continue;
-    }
-
-    if (/^\s/.test(line)) {
-      throw new Error(`Invalid YAML frontmatter syntax at line ${index + 1}`);
-    }
-
-    const match = line.match(/^([A-Za-z0-9_-]+):(.*)$/);
-    if (!match) {
-      throw new Error(`Invalid YAML frontmatter syntax at line ${index + 1}`);
-    }
-
-    const [, key, rawValue] = match;
-    const value = rawValue.trim();
-
-    if (value !== '') {
-      parsed[key] = parseScalar(value);
-      index++;
-      continue;
-    }
-
-    const listValues: SkillMetadataScalar[] = [];
-    index++;
-
-    while (index < lines.length) {
-      const listLine = lines[index];
-      const listTrimmed = listLine.trim();
-
-      if (listTrimmed === '' || listTrimmed.startsWith('#')) {
-        index++;
-        continue;
-      }
-
-      if (!/^\s/.test(listLine)) {
-        break;
-      }
-
-      const listMatch = listLine.match(/^\s*-\s+(.*)$/);
-      if (!listMatch) {
-        throw new Error(`Invalid YAML frontmatter syntax at line ${index + 1}`);
-      }
-
-      listValues.push(parseScalar(listMatch[1]));
-      index++;
-    }
-
-    parsed[key] = listValues;
+function parseFrontmatterDocument(document: string): FrontMatterResult<Record<string, unknown>> {
+  try {
+    return frontMatter<Record<string, unknown>>(document);
+  } catch {
+    throw new Error(`Skill file has invalid YAML frontmatter in ${SKILL_FILE_NAME}`);
   }
+}
 
-  return parsed;
+function getRequiredMetadataString(metadata: Record<string, SkillMetadataValue>, key: 'name' | 'description'): string {
+  const value = metadata[key];
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`Skill frontmatter must include a non-empty "${key}" in ${SKILL_FILE_NAME}`);
+  }
+  return value.trim();
 }
 
 function parseSkillDocument(rawDocument: string): { metadata: SkillMetadata; content: string } {
-  const normalizedDocument = rawDocument.replace(/\r\n/g, '\n');
-  const lines = normalizedDocument.split('\n');
-
-  if (lines[0]?.trim() !== '---') {
+  const parsed = parseFrontmatterDocument(rawDocument.replace(/\r\n/g, '\n'));
+  if (!parsed.frontmatter) {
     throw new Error(`Skill file is missing required YAML frontmatter in ${SKILL_FILE_NAME}`);
   }
 
-  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
-  if (closingIndex === -1) {
-    throw new Error(`Skill file has invalid YAML frontmatter in ${SKILL_FILE_NAME}`);
-  }
-
-  const metadata = parseFrontmatter(lines.slice(1, closingIndex).join('\n'));
-  const name = metadata.name;
-  const description = metadata.description;
-
-  if (typeof name !== 'string' || name.trim() === '') {
-    throw new Error(`Skill frontmatter must include a non-empty "name" in ${SKILL_FILE_NAME}`);
-  }
-
-  if (typeof description !== 'string' || description.trim() === '') {
-    throw new Error(`Skill frontmatter must include a non-empty "description" in ${SKILL_FILE_NAME}`);
-  }
+  const metadata = normalizeMetadata(parsed.attributes);
+  const name = getRequiredMetadataString(metadata, 'name');
+  const description = getRequiredMetadataString(metadata, 'description');
 
   return {
     metadata: {
       ...metadata,
-      name: name.trim(),
-      description: description.trim(),
+      name,
+      description,
     },
-    content: lines.slice(closingIndex + 1).join('\n').trim(),
+    content: parsed.body.trim(),
   };
 }
 
@@ -179,21 +110,8 @@ async function readOptionalResourcePaths(rootPath: string): Promise<SkillResourc
 
   for (const directoryName of OPTIONAL_RESOURCE_DIRS) {
     const candidatePath = path.join(rootPath, directoryName);
-
-    try {
-      const candidateStat = await stat(candidatePath);
-      if (!candidateStat.isDirectory()) {
-        continue;
-      }
-
-      resourcePaths[directoryName] = await resolveSafeExistingPath(rootPath, candidatePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        continue;
-      }
-
-      throw error;
-    }
+    if (!(await statIfExists(candidatePath))?.isDirectory()) continue;
+    resourcePaths[directoryName] = await resolveSafeExistingPath(rootPath, candidatePath);
   }
 
   return resourcePaths;
@@ -213,15 +131,27 @@ function buildSkillIndex(skills: readonly AgentSkill[]): Map<string, AgentSkill>
   return skillIndex;
 }
 
-async function statOrThrow(filePath: string, notFoundMessage: string): Promise<Stats> {
+function isMissingPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+async function statIfExists(filePath: string): Promise<Stats | undefined> {
   try {
     return await stat(filePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(notFoundMessage);
+    if (isMissingPathError(error)) {
+      return undefined;
     }
     throw error;
   }
+}
+
+async function statOrThrow(filePath: string, notFoundMessage: string): Promise<Stats> {
+  const stats = await statIfExists(filePath);
+  if (!stats) {
+    throw new Error(notFoundMessage);
+  }
+  return stats;
 }
 
 export async function loadSkill(skillPath: string): Promise<AgentSkill> {
@@ -276,20 +206,7 @@ export async function loadSkills(rootDirectoryPath: string): Promise<AgentSkill[
   for (const directoryName of skillDirectories) {
     const candidatePath = path.join(resolvedRootDirectoryPath, directoryName);
     const candidateEntryPath = path.join(candidatePath, SKILL_FILE_NAME);
-
-    try {
-      const candidateEntryStats = await stat(candidateEntryPath);
-      if (!candidateEntryStats.isFile()) {
-        continue;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        continue;
-      }
-
-      throw error;
-    }
-
+    if (!(await statIfExists(candidateEntryPath))?.isFile()) continue;
     discoveredSkills.push(await loadSkill(candidatePath));
   }
 

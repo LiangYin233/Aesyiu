@@ -1,6 +1,6 @@
 import Anthropic, { type ClientOptions as AnthropicClientOptions } from '@anthropic-ai/sdk';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
-import { LLMProvider, type GenerateOptions } from '../index.js';
+import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const ANTHROPIC_MODELS: ModelDefinition[] = [
@@ -34,10 +34,10 @@ export class AnthropicProvider extends LLMProvider {
   constructor(config: ProviderConfig, models: ModelDefinition[]) {
     super('anthropic', config, models);
 
-    const clientConfig: AnthropicClientOptions = { apiKey: config.apiKey };
-    if (config.baseURL) {
-      clientConfig.baseURL = config.baseURL;
-    }
+    const clientConfig: AnthropicClientOptions = {
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    };
     this.client = new Anthropic(clientConfig);
   }
 
@@ -55,7 +55,7 @@ export class AnthropicProvider extends LLMProvider {
         const contentBlocks: AnthropicToolResultBlockParam[] = [
           {
             type: 'tool_result',
-            tool_use_id: msg.tool_call_id ?? '',
+            tool_use_id: requireToolCallId(msg),
             content: msg.content ?? '',
           },
         ];
@@ -88,7 +88,7 @@ export class AnthropicProvider extends LLMProvider {
       }
 
       sdkMessages.push({
-        role: msg.role as 'user' | 'assistant',
+        role: 'user',
         content: msg.content ?? '',
       });
     }
@@ -125,19 +125,13 @@ export class AnthropicProvider extends LLMProvider {
       }
     }
 
-    const message: Message = {
-      role: 'assistant',
-      content: textContents.length > 0 ? textContents.join('') : (toolCalls.length > 0 ? null : ''),
-      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-    };
-
     const usage: TokenUsage = {
       promptTokens: response.usage.input_tokens,
       completionTokens: response.usage.output_tokens,
       totalTokens: response.usage.input_tokens + response.usage.output_tokens,
     };
 
-    return { message, usage };
+    return { message: this.buildAssistantMessage(textContents.join(''), toolCalls), usage };
   }
 
   public async generate(
@@ -163,7 +157,7 @@ export class AnthropicProvider extends LLMProvider {
     const merged = this.mergeExtraBody(params, modelDef.extraBody);
     const response = await this.client.messages.create(
       merged as Anthropic.MessageCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
+      this.getRequestOptions(options),
     );
     return this.fromSDKResponse(response);
   }
@@ -192,7 +186,7 @@ export class AnthropicProvider extends LLMProvider {
 
     const stream = this.client.messages.stream(
       merged as Anthropic.MessageCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
+      this.getRequestOptions(options),
     );
 
     let content = '';
@@ -224,7 +218,7 @@ export class AnthropicProvider extends LLMProvider {
           toolCalls.push({
             id: currentToolId,
             name: currentToolName,
-            arguments: currentToolInput || '{}',
+            arguments: currentToolInput,
           });
           currentToolId = '';
           currentToolName = '';
@@ -241,11 +235,7 @@ export class AnthropicProvider extends LLMProvider {
       }
     }
 
-    const finalMessage: Message = {
-      role: 'assistant',
-      content: content || null,
-      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-    };
+    const finalMessage = this.buildAssistantMessage(content, toolCalls);
     yield { message: finalMessage, usage: finalUsage };
   }
 }

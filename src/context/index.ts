@@ -42,9 +42,8 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     if (!resolvedModelId) {
       throw new Error(`Provider "${provider.name}" has no models registered`);
     }
-    const resolvedModel = provider.getModel(resolvedModelId);
     this.activeProvider = provider;
-    this.activeModel = resolvedModel;
+    this.activeModel = provider.getModel(resolvedModelId);
   }
 
   public accumulateUsage(usage: TokenUsage): void {
@@ -65,7 +64,7 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
   }
 
   public addMessages(messages: MessageInput[]): Message[] {
-    return messages.map((message) => this.addMessage(message));
+    return messages.map(this.addMessage, this);
   }
 
   public setMessage(id: string, patch: MessagePatch): Message {
@@ -82,13 +81,11 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
       throw new Error(`Message "${id}" not found`);
     }
 
-    const updatedMessage: Message = {
+    return (this._messages[messageIndex] = {
       ...this._messages[messageIndex],
       ...patch,
       id,
-    };
-    this._messages[messageIndex] = updatedMessage;
-    return updatedMessage;
+    });
   }
 
   public clearMessages(): void {
@@ -96,7 +93,7 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
   }
 
   public replaceMessages(messages: MessageInput[]): void {
-    this._messages = [];
+    this.clearMessages();
     this.addMessages(messages);
   }
 
@@ -114,11 +111,9 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     };
 
     const existing = this._messages.find((message) => message._meta?.promptSection === name);
-    if (existing?.id) {
-      return this.setMessage(existing.id, { content: section.content, _meta: meta });
-    }
-
-    return this.addMessage({ role: 'system', content: section.content, _meta: meta });
+    return existing?.id
+      ? this.setMessage(existing.id, { content: section.content, _meta: meta })
+      : this.addMessage({ role: 'system', content: section.content, _meta: meta });
   }
 
   public removePromptSection(name: string): number {

@@ -71,10 +71,12 @@ export class MemoryManager {
     const rest = [...(grouped.rest ?? [])];
 
     const retainCount = this.config.retainLatestMessages;
-    const protectedLatest = rest.length > retainCount
-      ? rest.splice(-retainCount)
-      : rest.splice(0);
+    let splitIndex = Math.max(0, rest.length - retainCount);
+    while (splitIndex > 0 && rest[splitIndex].role === 'tool') {
+      splitIndex--;
+    }
 
+    const protectedLatest = rest.splice(splitIndex);
     return { pinned, compressible: rest, protectedLatest };
   }
 
@@ -92,7 +94,7 @@ export class MemoryManager {
       content: `Please summarize the following conversation history, preserving key information and context:\n\n${conversationSummary}`,
     };
 
-    const fn = llm ?? (async (msgs) => ctx.activeProvider.generate(ctx.activeModel, msgs));
+    const fn = llm ?? ((msgs) => ctx.activeProvider.generate(ctx.activeModel, msgs));
     const { message, usage } = await fn([summaryPrompt]);
     ctx.accumulateUsage(usage);
 

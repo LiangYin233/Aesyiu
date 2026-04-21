@@ -1,7 +1,7 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
-import { LLMProvider, type GenerateOptions } from '../index.js';
+import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const OPENAI_COMPLETION_MODELS: ModelDefinition[] = [
@@ -16,10 +16,10 @@ export class OpenAICompletionProvider extends LLMProvider {
   constructor(config: ProviderConfig, models: ModelDefinition[]) {
     super('openai-completion', config, models);
 
-    const clientConfig: OpenAIClientOptions = { apiKey: config.apiKey };
-    if (config.baseURL) {
-      clientConfig.baseURL = config.baseURL;
-    }
+    const clientConfig: OpenAIClientOptions = {
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    };
     this.client = new OpenAI(clientConfig);
   }
 
@@ -30,7 +30,7 @@ export class OpenAICompletionProvider extends LLMProvider {
       if (msg.role === 'tool') {
         sdkMessages.push({
           role: 'tool',
-          tool_call_id: msg.tool_call_id ?? '',
+          tool_call_id: requireToolCallId(msg),
           content: msg.content ?? '',
         });
         continue;
@@ -92,19 +92,13 @@ export class OpenAICompletionProvider extends LLMProvider {
         arguments: tc.function.arguments,
       }));
 
-    const message: Message = {
-      role: 'assistant',
-      content: msg?.content ?? null,
-      ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-    };
-
     const usage: TokenUsage = {
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: response.usage?.completion_tokens ?? 0,
       totalTokens: response.usage?.total_tokens ?? 0,
     };
 
-    return { message, usage };
+    return { message: this.buildAssistantMessage(msg?.content ?? null, toolCalls), usage };
   }
 
   public async generate(
@@ -126,7 +120,7 @@ export class OpenAICompletionProvider extends LLMProvider {
     const merged = this.mergeExtraBody(params, modelDef.extraBody);
     const response = await this.client.chat.completions.create(
       merged as OpenAI.ChatCompletionCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
+      this.getRequestOptions(options),
     );
     return this.fromSDKResponse(response);
   }
@@ -153,7 +147,7 @@ export class OpenAICompletionProvider extends LLMProvider {
 
     const stream = await this.client.chat.completions.create(
       merged as OpenAI.ChatCompletionCreateParamsStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
+      this.getRequestOptions(options),
     );
 
     let content = '';
@@ -195,12 +189,8 @@ export class OpenAICompletionProvider extends LLMProvider {
       }
     }
 
-    const tcArray = toolCalls.values().toArray();
-    const finalMessage: Message = {
-      role: 'assistant',
-      content: content || null,
-      ...(tcArray.length > 0 ? { tool_calls: tcArray } : {}),
-    };
+    const tcArray = Array.from(toolCalls.values());
+    const finalMessage = this.buildAssistantMessage(content, tcArray);
     yield { message: finalMessage, usage: finalUsage };
   }
 }

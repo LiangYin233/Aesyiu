@@ -12,36 +12,42 @@ export interface CreateLLMProviderInput {
   models: ModelDefinition[];
 }
 
+type ProviderRegistryEntry = {
+  create: (config: ProviderConfig, models: ModelDefinition[]) => LLMProvider;
+  models: ModelDefinition[];
+};
+
+const PROVIDERS: Record<LLMProviderType, ProviderRegistryEntry> = {
+  anthropic: {
+    create: (config, models) => new AnthropicProvider(config, models),
+    models: ANTHROPIC_MODELS,
+  },
+  'openai-completion': {
+    create: (config, models) => new OpenAICompletionProvider(config, models),
+    models: OPENAI_COMPLETION_MODELS,
+  },
+  'openai-responses': {
+    create: (config, models) => new OpenAIResponsesProvider(config, models),
+    models: OPENAI_RESPONSES_MODELS,
+  },
+};
+
 function cloneModelDefinition(model: ModelDefinition): ModelDefinition {
   return structuredClone(model);
 }
 
 export function createLLMProvider(input: CreateLLMProviderInput): LLMProvider {
-  switch (input.type) {
-    case 'anthropic':
-      return new AnthropicProvider(input.config, input.models);
-    case 'openai-completion':
-      return new OpenAICompletionProvider(input.config, input.models);
-    case 'openai-responses':
-      return new OpenAIResponsesProvider(input.config, input.models);
-  }
+  return PROVIDERS[input.type].create(input.config, input.models);
 }
 
 export function getDefaultModels(type: LLMProviderType): ModelDefinition[] {
-  switch (type) {
-    case 'anthropic':
-      return ANTHROPIC_MODELS.map(cloneModelDefinition);
-    case 'openai-completion':
-      return OPENAI_COMPLETION_MODELS.map(cloneModelDefinition);
-    case 'openai-responses':
-      return OPENAI_RESPONSES_MODELS.map(cloneModelDefinition);
-  }
+  return PROVIDERS[type].models.map(cloneModelDefinition);
 }
 
 export function getDefaultModel(type: LLMProviderType, modelId: string): ModelDefinition {
-  const model = getDefaultModels(type).find((entry) => entry.id === modelId);
+  const model = PROVIDERS[type].models.find((entry) => entry.id === modelId);
   if (!model) {
     throw new Error(`Model "${modelId}" not found for provider "${type}"`);
   }
-  return model;
+  return cloneModelDefinition(model);
 }

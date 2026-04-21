@@ -1,6 +1,6 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamChunk } from '../../types/index.js';
-import { LLMProvider, type GenerateOptions } from '../index.js';
+import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
@@ -20,10 +20,10 @@ export class OpenAIResponsesProvider extends LLMProvider {
   constructor(config: ProviderConfig, models: ModelDefinition[]) {
     super('openai-responses', config, models);
 
-    const clientConfig: OpenAIClientOptions = { apiKey: config.apiKey };
-    if (config.baseURL) {
-      clientConfig.baseURL = config.baseURL;
-    }
+    const clientConfig: OpenAIClientOptions = {
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    };
     this.client = new OpenAI(clientConfig);
   }
 
@@ -42,7 +42,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
       if (msg.role === 'tool') {
         input.push({
           type: 'function_call_output',
-          call_id: msg.tool_call_id ?? '',
+          call_id: requireToolCallId(msg),
           output: msg.content ?? '',
         } as OpenAI.Responses.ResponseInputItem.FunctionCallOutput);
         continue;
@@ -115,19 +115,13 @@ export class OpenAIResponsesProvider extends LLMProvider {
       }
     }
 
-    const message: Message = {
-      role: 'assistant',
-      content: textParts.length > 0 ? textParts.join('') : (toolCalls.length > 0 ? null : ''),
-      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-    };
-
     const usage: TokenUsage = {
       promptTokens: response.usage?.input_tokens ?? 0,
       completionTokens: response.usage?.output_tokens ?? 0,
       totalTokens: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
     };
 
-    return { message, usage };
+    return { message: this.buildAssistantMessage(textParts.join(''), toolCalls), usage };
   }
 
   public async generate(
@@ -149,7 +143,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
     const merged = this.mergeExtraBody(params, modelDef.extraBody);
     const response = await this.client.responses.create(
       merged as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
+      this.getRequestOptions(options),
     );
     return this.fromSDKResponse(response);
   }
@@ -175,7 +169,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
 
     const stream = await this.client.responses.create(
       merged as OpenAI.Responses.ResponseCreateParamsStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
+      this.getRequestOptions(options),
     );
 
     let content = '';
@@ -214,7 +208,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
           };
           current.id = item.call_id ?? current.id;
           current.name = item.name ?? current.name;
-          current.arguments = current.arguments || item.arguments || '{}';
+          current.arguments ||= item.arguments ?? '';
           toolCalls.set(event.output_index, current);
         }
       } else if (event.type === 'response.completed') {
@@ -229,16 +223,11 @@ export class OpenAIResponsesProvider extends LLMProvider {
       }
     }
 
-    const finalToolCalls = toolCalls.entries()
-      .toArray()
+    const finalToolCalls = Array.from(toolCalls.entries())
       .sort(([left], [right]) => left - right)
       .map(([, toolCall]) => toolCall);
 
-    const finalMessage: Message = {
-      role: 'assistant',
-      content: content || null,
-      ...(finalToolCalls.length > 0 ? { tool_calls: finalToolCalls } : {}),
-    };
+    const finalMessage = this.buildAssistantMessage(content, finalToolCalls);
     yield { message: finalMessage, usage: finalUsage };
   }
 }
