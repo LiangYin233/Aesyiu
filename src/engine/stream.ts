@@ -1,7 +1,7 @@
 import type { AgentContext } from '../context/index.js';
 import type { EngineResult, Message, RunStreamEvent, StreamChunk, TokenUsage, ToolCall } from '../types/index.js';
 import type { Middleware } from './types.js';
-import { AsyncQueue, combineAbortSignals, composeUserMiddleware, toError } from './utils.js';
+import { AsyncQueue, combineAbortSignals, runUserMiddleware, toError } from './utils.js';
 
 export async function* runStreamWithMiddleware(
   ctx: AgentContext,
@@ -21,20 +21,19 @@ export async function* runStreamWithMiddleware(
   }
 
   const eventQueue = new AsyncQueue<RunStreamEvent>();
-  const runner = composeUserMiddleware(middlewares, async (middlewareCtx) => {
-    const gen = runCore(middlewareCtx, combinedSignal);
-    while (true) {
-      const next = await gen.next();
-      if (next.done) {return next.value;}
-      eventQueue.push(next.value);
-    }
-  });
 
   let finalResult: EngineResult | undefined;
   let runnerError: unknown;
   const runnerPromise = (async (): Promise<void> => {
     try {
-      finalResult = await runner(ctx);
+      finalResult = await runUserMiddleware(middlewares, ctx, async () => {
+        const gen = runCore(ctx, combinedSignal);
+        while (true) {
+          const next = await gen.next();
+          if (next.done) {return next.value;}
+          eventQueue.push(next.value);
+        }
+      });
     } catch (error) {
       runnerError = error;
     } finally {

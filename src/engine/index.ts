@@ -32,12 +32,12 @@ import {
   AsyncQueue,
   chainMiddleware,
   classifyAbortOrTimeout,
-  composeUserMiddleware,
   consumeGenerator,
   getCauseString,
   getErrorMessage,
   getErrorSource,
   rethrowProgrammingError,
+  runUserMiddleware,
   runHooks,
 } from './utils.js';
 
@@ -266,13 +266,17 @@ export class AesyiuEngine {
     await this.dispose();
   }
 
+  private prepareExecution(input: Message, ctx: AgentContext, options?: RunOptions) {
+    return prepareRun(input, ctx, options, this.globalTools, this.registeredSkills);
+  }
+
   public async run(input: Message, ctx: AgentContext, options?: RunOptions): Promise<EngineResult> {
-    const { availableTools, signal } = prepareRun(input, ctx, options, this.globalTools, this.registeredSkills);
-    const runner = composeUserMiddleware(
+    const { availableTools, signal } = this.prepareExecution(input, ctx, options);
+    return runUserMiddleware(
       this.middlewares,
-      (c) => consumeGenerator(this.coreReactLoop(c, availableTools, signal, false)),
+      ctx,
+      () => consumeGenerator(this.coreReactLoop(ctx, availableTools, signal, false)),
     );
-    return runner(ctx);
   }
 
   public async *runStream(
@@ -280,7 +284,7 @@ export class AesyiuEngine {
     ctx: AgentContext,
     options?: RunOptions,
   ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
-    const { availableTools, signal } = prepareRun(input, ctx, options, this.globalTools, this.registeredSkills);
+    const { availableTools, signal } = this.prepareExecution(input, ctx, options);
     return yield* runStreamWithMiddleware(
       ctx,
       this.middlewares,

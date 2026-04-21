@@ -72,32 +72,23 @@ export async function chainMiddleware<TCtx, TResult>(
   return dispatch(0);
 }
 
-export function composeUserMiddleware(
-  middlewares: Middleware[],
-  core: (ctx: AgentContext) => Promise<EngineResult>,
-): (ctx: AgentContext) => Promise<EngineResult> {
-  if (middlewares.length === 0) {return core;}
-
-  return async function executeUserMiddleware(ctx) {
-    let result: EngineResult | undefined;
-    let index = -1;
-
-    const dispatch = async (i: number): Promise<void> => {
-      if (i <= index) {throw new AesyiuProgrammingError('next() called multiple times');}
-      index = i;
-      if (i < middlewares.length) {
-        await middlewares[i](ctx, () => dispatch(i + 1));
-      } else {
-        result = await core(ctx);
+export function runUserMiddleware(
+  middlewares: ReadonlyArray<Middleware>,
+  ctx: AgentContext,
+  core: () => Promise<EngineResult>,
+): Promise<EngineResult> {
+  const wrappedMiddlewares: ReadonlyArray<MiddlewareFn<AgentContext, EngineResult>> = middlewares.map((middleware) => async (middlewareCtx, next) => {
+      let result: EngineResult | undefined;
+      await middleware(middlewareCtx, async () => {
+        result = await next();
+      });
+      if (result === undefined) {
+        throw new AesyiuProgrammingError('user middleware did not call next(); engine core did not run');
       }
-    };
+      return result;
+    });
 
-    await dispatch(0);
-    if (result === undefined) {
-      throw new AesyiuProgrammingError('user middleware did not call next(); engine core did not run');
-    }
-    return result;
-  };
+  return chainMiddleware(wrappedMiddlewares, ctx, core);
 }
 
 export async function consumeGenerator<TResult>(gen: AsyncGenerator<unknown, TResult, void>): Promise<TResult> {
