@@ -69,14 +69,14 @@ export class OpenAICompletionProvider extends LLMProvider {
   }
 
   private toSDKTools(tools?: Tool[]): ChatCompletionTool[] | undefined {
-    return this.mapTools(tools, (tool) => ({
+    return tools?.length ? tools.map((tool) => ({
       type: 'function' as const,
       function: {
         name: tool.name,
         description: tool.description,
         parameters: toProviderToolParameters(tool.parameters) as Record<string, unknown>,
       },
-    }));
+    })) : undefined;
   }
 
   private fromSDKResponse(response: OpenAI.ChatCompletion): { message: Message; usage: TokenUsage } {
@@ -116,10 +116,10 @@ export class OpenAICompletionProvider extends LLMProvider {
     if (sdkTools) {
       params.tools = sdkTools;
     }
-    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
     const response = await this.client.chat.completions.create(
       merged as OpenAI.ChatCompletionCreateParamsNonStreaming,
-      this.getRequestOptions(options),
+      options?.signal ? { signal: options.signal } : undefined,
     );
     return this.fromSDKResponse(response);
   }
@@ -142,11 +142,11 @@ export class OpenAICompletionProvider extends LLMProvider {
     if (sdkTools) {
       params.tools = sdkTools;
     }
-    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
 
     const stream = await this.client.chat.completions.create(
       merged as OpenAI.ChatCompletionCreateParamsStreaming,
-      this.getRequestOptions(options),
+      options?.signal ? { signal: options.signal } : undefined,
     );
 
     let content = '';

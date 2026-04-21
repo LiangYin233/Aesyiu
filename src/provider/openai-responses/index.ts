@@ -83,13 +83,13 @@ export class OpenAIResponsesProvider extends LLMProvider {
   }
 
   private toSDKTools(tools?: Tool[]): OpenAI.Responses.Tool[] | undefined {
-    return this.mapTools(tools, (tool) => ({
+    return tools?.length ? tools.map((tool) => ({
       type: 'function' as const,
       name: tool.name,
       description: tool.description,
       parameters: toProviderToolParameters(tool.parameters) as Record<string, unknown> | null,
       strict: null,
-    }));
+    })) : undefined;
   }
 
   private fromSDKResponse(response: OpenAI.Responses.Response): { message: Message; usage: TokenUsage } {
@@ -139,10 +139,10 @@ export class OpenAIResponsesProvider extends LLMProvider {
     if (sdkTools) {
       params.tools = sdkTools;
     }
-    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
     const response = await this.client.responses.create(
       merged as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-      this.getRequestOptions(options),
+      options?.signal ? { signal: options.signal } : undefined,
     );
     return this.fromSDKResponse(response);
   }
@@ -164,11 +164,11 @@ export class OpenAIResponsesProvider extends LLMProvider {
     if (sdkTools) {
       params.tools = sdkTools;
     }
-    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
 
     const stream = await this.client.responses.create(
       merged as OpenAI.Responses.ResponseCreateParamsStreaming,
-      this.getRequestOptions(options),
+      options?.signal ? { signal: options.signal } : undefined,
     );
 
     let content = '';

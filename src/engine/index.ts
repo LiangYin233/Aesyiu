@@ -1,6 +1,6 @@
 import type { AgentContext } from '../context/index.js';
 import { filterVisibleMessages } from '../context/index.js';
-import { AesyiuProgrammingError, AesyiuRuntimeError, isRuntimeError } from '../error/index.js';
+import { AesyiuProgrammingError } from '../error/index.js';
 import type {
   EngineErrorSource,
   EngineResult,
@@ -13,12 +13,9 @@ import type {
 import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager } from '../memory/index.js';
 import { createLoadSkillTool, type AgentSkill } from '../skill/index.js';
+import { isZodSchema } from '../tool/schema.js';
 import type {
-  AfterToolCallHook,
   AesyiuEngineConfig,
-  BeforeLLMRequestHook,
-  BeforeToolCallHook,
-  EngineHooks,
   LLMMiddleware,
   LLMMiddlewareContext,
   Middleware,
@@ -31,14 +28,10 @@ import { runToolCalls } from './tool-runner.js';
 import {
   AsyncQueue,
   chainMiddleware,
-  classifyAbortOrTimeout,
   consumeGenerator,
-  getCauseString,
   getErrorMessage,
-  getErrorSource,
   rethrowProgrammingError,
   runUserMiddleware,
-  runHooks,
 } from './utils.js';
 
 function createLLMMiddlewareContext(
@@ -74,34 +67,30 @@ function createResult(status: 'completed' | 'max_steps_reached', ctx: AgentConte
   };
 }
 
+function getErrorSource(error: unknown, signal?: AbortSignal): EngineErrorSource {
+  if (error instanceof Error && error.name === 'TimeoutError') return 'timeout';
+  if (signal?.aborted && error === signal.reason) return 'aborted';
+  if (error instanceof Error && error.name === 'AbortError') return 'aborted';
+  return 'unknown';
+}
+
 function createErrorResult(
   ctx: AgentContext,
   error: unknown,
-  fallbackSource: EngineErrorSource,
+  source: EngineErrorSource,
 ): EngineResult {
-  const source = getErrorSource(error) ?? fallbackSource;
-  const cause = getCauseString(isRuntimeError(error) ? error.cause : error);
-
   return {
     status: 'error',
     ...createResultBase(ctx),
     error: {
       message: getErrorMessage(error),
       source,
-      ...(cause ? { cause } : {}),
     },
   };
 }
 
 export type {
-  AfterToolCallHook,
-  AfterToolCallHookContext,
   AesyiuEngineConfig,
-  BeforeLLMRequestHook,
-  BeforeLLMRequestHookContext,
-  BeforeToolCallHook,
-  BeforeToolCallHookContext,
-  EngineHooks,
   LLMMiddleware,
   LLMMiddlewareContext,
   Middleware,
@@ -117,9 +106,6 @@ export class AesyiuEngine {
   private middlewares: Middleware[] = [];
   private llmMiddlewares: LLMMiddleware[] = [];
   private toolMiddlewares: ToolMiddleware[] = [];
-  private beforeLLMRequestHooks: BeforeLLMRequestHook[] = [];
-  private beforeToolCallHooks: BeforeToolCallHook[] = [];
-  private afterToolCallHooks: AfterToolCallHook[] = [];
   private maxSteps: number;
   private mcpManager: MCPManager;
   private memoryManager: MemoryManager;
@@ -151,35 +137,13 @@ export class AesyiuEngine {
     return this;
   }
 
-  public useHooks(hooks: EngineHooks): this {
-    if (hooks.beforeLLMRequest) {
-      this.onBeforeLLMRequest(hooks.beforeLLMRequest);
-    }
-    if (hooks.beforeToolCall) {
-      this.onBeforeToolCall(hooks.beforeToolCall);
-    }
-    if (hooks.afterToolCall) {
-      this.onAfterToolCall(hooks.afterToolCall);
-    }
-    return this;
-  }
-
-  public onBeforeLLMRequest(hook: BeforeLLMRequestHook): this {
-    this.beforeLLMRequestHooks.push(hook);
-    return this;
-  }
-
-  public onBeforeToolCall(hook: BeforeToolCallHook): this {
-    this.beforeToolCallHooks.push(hook);
-    return this;
-  }
-
-  public onAfterToolCall(hook: AfterToolCallHook): this {
-    this.afterToolCallHooks.push(hook);
-    return this;
-  }
-
   public registerTool(tool: Tool): this {
+    if (tool.parameters && !isZodSchema(tool.parameters)) {
+      console.warn(
+        `[aesyiu] tool "${tool.name}" uses a JSON schema; arguments pass through unvalidated. ` +
+        'Provide a Zod schema to enable runtime validation.',
+      );
+    }
     this.globalTools.set(tool.name, tool);
     return this;
   }
@@ -277,7 +241,7 @@ export class AesyiuEngine {
     return runUserMiddleware(
       this.middlewares,
       ctx,
-      () => consumeGenerator(this.coreReactLoop(ctx, availableTools, signal, false)),
+      () => consumeGenerator(this.coreReactLoop(ctx, availableTools, signal)),
     );
   }
 
@@ -291,7 +255,7 @@ export class AesyiuEngine {
       ctx,
       this.middlewares,
       signal,
-      (middlewareCtx, middlewareSignal) => this.coreReactLoop(middlewareCtx, availableTools, middlewareSignal, true),
+      (middlewareCtx, middlewareSignal) => this.coreReactLoop(middlewareCtx, availableTools, middlewareSignal),
     );
   }
 
@@ -299,7 +263,6 @@ export class AesyiuEngine {
     ctx: AgentContext,
     availableTools: Map<string, Tool>,
     signal: AbortSignal | undefined,
-    emitStream: boolean,
   ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
     const tools = Array.from(availableTools.values());
     let step = 0;
@@ -321,29 +284,19 @@ export class AesyiuEngine {
       let usage: TokenUsage;
       try {
         const outbound = prepareOutboundMessages([...ctx.messages], this.compatibilityMode);
-        if (emitStream) {
-          const result = yield* this.streamLLMStep(ctx, outbound, tools, signal);
-          assistantMessage = result.message;
-          usage = result.usage;
-        } else {
-          const result = await this.llmStep(ctx, outbound, tools, signal);
-          assistantMessage = result.message;
-          usage = result.usage;
-        }
+        const result = yield* this.streamLLMStep(ctx, outbound, tools, signal);
+        assistantMessage = result.message;
+        usage = result.usage;
       } catch (error) {
         rethrowProgrammingError(error);
-        return createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'provider');
+        return createErrorResult(ctx, error, getErrorSource(error, signal) ?? 'provider');
       }
 
       ctx.addMessage(assistantMessage);
       yield { type: 'assistant_message', message: assistantMessage };
 
       try {
-        await this.memoryManager.checkAndOptimize(
-          ctx,
-          usage,
-          (msgs) => this.llmStep(ctx, msgs, [], signal),
-        );
+        await this.memoryManager.checkAndOptimize(ctx, usage);
       } catch (error) {
         rethrowProgrammingError(error);
         return createErrorResult(ctx, error, 'memory');
@@ -363,7 +316,7 @@ export class AesyiuEngine {
         toolResults = await this.runTools(assistantMessage.tool_calls, availableTools, ctx, signal);
       } catch (error) {
         rethrowProgrammingError(error);
-        return createErrorResult(ctx, error, classifyAbortOrTimeout(error, signal) ?? 'tool');
+        return createErrorResult(ctx, error, getErrorSource(error, signal) ?? 'tool');
       }
       ctx.addMessages(toolResults);
 
@@ -375,16 +328,6 @@ export class AesyiuEngine {
     }
 
     return createResult('max_steps_reached', ctx);
-  }
-  private async llmStep(
-    ctx: AgentContext,
-    messages: Message[],
-    tools: Tool[],
-    signal: AbortSignal | undefined,
-  ): Promise<LLMOperationResult> {
-    return this.executeLLMOperation(ctx, messages, tools, signal, (mwCtx) =>
-      ctx.activeProvider.generate(ctx.activeModel, mwCtx.messages, mwCtx.tools, mwCtx.options),
-    );
   }
 
   private async *streamLLMStep(
@@ -422,10 +365,7 @@ export class AesyiuEngine {
     signal: AbortSignal | undefined,
     operation: (mwCtx: LLMMiddlewareContext) => Promise<LLMOperationResult>,
   ): Promise<LLMOperationResult> {
-    const mwCtx = await runHooks(
-      this.beforeLLMRequestHooks,
-      createLLMMiddlewareContext(ctx, messages, tools, signal),
-    );
+    const mwCtx = createLLMMiddlewareContext(ctx, messages, tools, signal);
 
     try {
       return await chainMiddleware(
@@ -435,7 +375,7 @@ export class AesyiuEngine {
       );
     } catch (error) {
       rethrowProgrammingError(error);
-      throw new AesyiuRuntimeError(classifyAbortOrTimeout(error, signal) ?? 'provider', error);
+      throw error;
     }
   }
 
@@ -451,8 +391,6 @@ export class AesyiuEngine {
       ctx,
       signal,
       this.toolMiddlewares,
-      this.beforeToolCallHooks,
-      this.afterToolCallHooks,
     );
   }
 }

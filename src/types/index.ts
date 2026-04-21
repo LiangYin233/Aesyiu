@@ -80,11 +80,11 @@ export interface ToolExecutionOptions {
   signal?: AbortSignal;
 }
 
-export interface Tool<TArgs = unknown, TResult = unknown, TCtx = unknown> {
+export interface Tool {
   name: string;
   description: string;
   parameters: ToolParameters;
-  execute: (args: TArgs, ctx: TCtx, options?: ToolExecutionOptions) => Promise<TResult>;
+  execute: (args: unknown, ctx: unknown, options?: ToolExecutionOptions) => Promise<unknown>;
 }
 
 export interface StreamChunk {

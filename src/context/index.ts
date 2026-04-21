@@ -2,14 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type { Message, MessageMeta, TokenUsage, ModelDefinition } from '../types/index.js';
 import type { LLMProvider } from '../provider/index.js';
 
-export interface AgentContextConfig<TState extends Record<string, unknown> = Record<string, unknown>> {
+export interface AgentContextConfig {
   provider: LLMProvider;
   modelId?: string;
-  initialState?: TState;
+  initialState?: Record<string, unknown>;
 }
 
 export type MessageInput = Omit<Message, 'id'> & { id?: string };
-export type MessagePatch = Partial<Omit<Message, 'id' | 'role'>>;
 
 export interface PromptSection {
   content: string;
@@ -20,15 +19,15 @@ export function filterVisibleMessages(messages: readonly Message[]): Message[] {
   return messages.filter((message) => !message._meta?.internal);
 }
 
-export class AgentContext<TState extends Record<string, unknown> = Record<string, unknown>> {
+export class AgentContext {
   private _messages: Message[] = [];
-  public state: TState;
+  public state: Record<string, unknown>;
   public sessionUsage: TokenUsage;
   public activeProvider!: LLMProvider;
   public activeModel!: ModelDefinition;
 
-  constructor(config: AgentContextConfig<TState>) {
-    this.state = (config.initialState ?? {}) as TState;
+  constructor(config: AgentContextConfig) {
+    this.state = config.initialState ?? {};
     this.sessionUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     this.switchLLM(config.provider, config.modelId);
   }
@@ -52,10 +51,6 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     this.sessionUsage.totalTokens += usage.totalTokens;
   }
 
-  public getVisibleMessages(): Message[] {
-    return filterVisibleMessages(this._messages);
-  }
-
   public addMessage(message: MessageInput): Message {
     const storedMessage = this.ensureMessageId(message);
     const insertIndex = this.findInsertIndex(storedMessage.role);
@@ -67,27 +62,6 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     return messages.map(this.addMessage, this);
   }
 
-  public setMessage(id: string, patch: MessagePatch): Message {
-    if ('id' in patch) {
-      throw new Error('setMessage does not allow changing message id');
-    }
-
-    if ('role' in patch) {
-      throw new Error('setMessage does not allow changing message role');
-    }
-
-    const messageIndex = this._messages.findIndex((message) => message.id === id);
-    if (messageIndex < 0) {
-      throw new Error(`Message "${id}" not found`);
-    }
-
-    return (this._messages[messageIndex] = {
-      ...this._messages[messageIndex],
-      ...patch,
-      id,
-    });
-  }
-
   public clearMessages(): void {
     this._messages = [];
   }
@@ -97,27 +71,19 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     this.addMessages(messages);
   }
 
-  public removeMessages(predicate: (message: Message, index: number) => boolean): number {
-    const originalLength = this._messages.length;
-    this._messages = this._messages.filter((message, index) => !predicate(message, index));
-    return originalLength - this._messages.length;
+  public setSystemPrompt(name: string, content: string): void {
+    const meta: MessageMeta = { isPinned: true, promptSection: name, internal: true };
+    const existing = this._messages.find((m) => m._meta?.promptSection === name);
+    if (existing?.id) {
+      const idx = this._messages.findIndex((m) => m.id === existing.id);
+      this._messages[idx] = { ...this._messages[idx], content, _meta: meta };
+    } else {
+      this.addMessage({ role: 'system', content, _meta: meta });
+    }
   }
 
-  public registerPromptSection(name: string, section: PromptSection): Message {
-    const meta: MessageMeta = {
-      isPinned: section.pinned ?? true,
-      promptSection: name,
-      internal: true,
-    };
-
-    const existing = this._messages.find((message) => message._meta?.promptSection === name);
-    return existing?.id
-      ? this.setMessage(existing.id, { content: section.content, _meta: meta })
-      : this.addMessage({ role: 'system', content: section.content, _meta: meta });
-  }
-
-  public removePromptSection(name: string): number {
-    return this.removeMessages((message) => message._meta?.promptSection === name);
+  public removeSystemPrompt(name: string): void {
+    this._messages = this._messages.filter((m) => m._meta?.promptSection !== name);
   }
 
   private ensureMessageId(message: MessageInput): Message {
@@ -131,7 +97,6 @@ export class AgentContext<TState extends Record<string, unknown> = Record<string
     if (role !== 'system') {
       return this._messages.length;
     }
-
     return this._messages.findLastIndex((message) => message.role === 'system') + 1;
   }
 }

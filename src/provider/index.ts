@@ -51,17 +51,6 @@ export abstract class LLMProvider {
     };
   }
 
-  protected getRequestOptions(options?: GenerateOptions): { signal: AbortSignal } | undefined {
-    return options?.signal ? { signal: options.signal } : undefined;
-  }
-
-  protected mapTools<TResult>(
-    tools: Tool[] | undefined,
-    map: (tool: Tool) => TResult,
-  ): TResult[] | undefined {
-    return tools?.length ? tools.map(map) : undefined;
-  }
-
   public abstract generate(
     model: ModelDefinition | string,
     messages: Message[],
@@ -75,12 +64,4 @@ export abstract class LLMProvider {
     tools?: Tool[],
     options?: GenerateOptions,
   ): AsyncGenerator<StreamChunk, void>;
-
-  protected mergeExtraBody(
-    baseParams: Record<string, any>,
-    extraBody?: Record<string, unknown>,
-  ): Record<string, any> {
-    if (!extraBody) {return baseParams;}
-    return { ...extraBody, ...baseParams };
-  }
 }

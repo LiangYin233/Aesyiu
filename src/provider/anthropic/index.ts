@@ -100,11 +100,11 @@ export class AnthropicProvider extends LLMProvider {
   }
 
   private toSDKTools(tools?: Tool[]): AnthropicTool[] | undefined {
-    return this.mapTools(tools, (tool) => ({
+    return tools?.length ? tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
       input_schema: toProviderToolParameters(tool.parameters) as Anthropic.Tool.InputSchema,
-    }));
+    })) : undefined;
   }
 
   private fromSDKResponse(response: Anthropic.Message): { message: Message; usage: TokenUsage } {
@@ -153,10 +153,10 @@ export class AnthropicProvider extends LLMProvider {
     if (sdkTools) {
       params.tools = sdkTools;
     }
-    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
     const response = await this.client.messages.create(
       merged as Anthropic.MessageCreateParamsNonStreaming,
-      this.getRequestOptions(options),
+      options?.signal ? { signal: options.signal } : undefined,
     );
     return this.fromSDKResponse(response);
   }
@@ -181,11 +181,11 @@ export class AnthropicProvider extends LLMProvider {
     if (sdkTools) {
       params.tools = sdkTools;
     }
-    const merged = this.mergeExtraBody(params, modelDef.extraBody);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
 
     const stream = this.client.messages.stream(
       merged as Anthropic.MessageCreateParamsNonStreaming,
-      this.getRequestOptions(options),
+      options?.signal ? { signal: options.signal } : undefined,
     );
 
     let content = '';

@@ -19,20 +19,20 @@ export type {
   RunStreamEvent,
 } from './types/index.js';
 export { AgentContext, filterVisibleMessages } from './context/index.js';
-export type { AgentContextConfig, MessageInput, MessagePatch, PromptSection } from './context/index.js';
+export type { AgentContextConfig, MessageInput, PromptSection } from './context/index.js';
 export { LLMProvider } from './provider/index.js';
 export type { GenerateOptions } from './provider/index.js';
 export { createLLMProvider, getDefaultModel, getDefaultModels } from './provider/factory/index.js';
 export type { CreateLLMProviderInput, LLMProviderType } from './provider/factory/index.js';
 export { MemoryManager } from './memory/index.js';
-export type { MemoryManagerConfig, MemoryLLMFn } from './memory/index.js';
+export type { MemoryManagerConfig } from './memory/index.js';
 export { MCPManager, namespaceMCPToolName } from './mcp/index.js';
 export type { MCPServerConfig, MCPServerStatus } from './mcp/index.js';
 export { loadSkill, loadSkills, renderSkillsPrompt, createLoadSkillTool } from './skill/index.js';
 export type { AgentSkill, SkillMetadata, SkillMetadataScalar, SkillMetadataValue, SkillResourcePaths } from './skill/index.js';
 export { defineTool } from './tool/index.js';
 export type { DefineToolConfig } from './tool/index.js';
-export { AesyiuProgrammingError, AesyiuRuntimeError, isProgrammingError, isRuntimeError } from './error/index.js';
+export { AesyiuProgrammingError, isProgrammingError } from './error/index.js';
 export { AesyiuEngine, isAbortError } from './engine/index.js';
 export type {
   Middleware,
@@ -40,13 +40,6 @@ export type {
   LLMMiddlewareContext,
   ToolMiddleware,
   ToolMiddlewareContext,
-  EngineHooks,
-  BeforeLLMRequestHook,
-  BeforeLLMRequestHookContext,
-  BeforeToolCallHook,
-  BeforeToolCallHookContext,
-  AfterToolCallHook,
-  AfterToolCallHookContext,
   RunOptions,
   AesyiuEngineConfig,
 } from './engine/index.js';

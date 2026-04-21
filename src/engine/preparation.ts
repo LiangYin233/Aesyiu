@@ -39,14 +39,11 @@ function resolveRunSkills(registeredSkills: readonly AgentSkill[], options?: Run
 function injectSkillPrompt(ctx: AgentContext, skills: readonly AgentSkill[]): void {
   const content = renderSkillsPrompt(skills);
   if (!content) {
-    ctx.removePromptSection(SKILL_PROMPT_SECTION);
+    ctx.removeSystemPrompt(SKILL_PROMPT_SECTION);
     return;
   }
 
-  const section = ctx.registerPromptSection(SKILL_PROMPT_SECTION, { content, pinned: true });
-  if (section._meta) {
-    section._meta.skillPrompt = true;
-  }
+  ctx.setSystemPrompt(SKILL_PROMPT_SECTION, content);
 }
 
 export function prepareRun(

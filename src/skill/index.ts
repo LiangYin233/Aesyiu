@@ -1,5 +1,4 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
-import type { Stats } from 'node:fs';
 import path from 'node:path';
 import frontMatter from 'front-matter';
 import type { FrontMatterResult } from 'front-matter';
@@ -39,54 +38,40 @@ function isSkillMetadataScalar(value: unknown): value is SkillMetadataScalar {
   return value === null || ['string', 'number', 'boolean'].includes(typeof value);
 }
 
-function toSkillMetadataValue(key: string, value: unknown): SkillMetadataValue {
-  if (isSkillMetadataScalar(value)) {
-    return value;
-  }
-  if (Array.isArray(value) && value.every(isSkillMetadataScalar)) {
-    return value;
-  }
-  throw new Error(`Skill frontmatter field "${key}" must be a scalar or scalar array in ${SKILL_FILE_NAME}`);
-}
-
-function normalizeMetadata(attributes: Record<string, unknown>): Record<string, SkillMetadataValue> {
-  return Object.fromEntries(
-    Object.entries(attributes).map(([key, value]) => [key, toSkillMetadataValue(key, value)]),
-  );
-}
-
-function parseFrontmatterDocument(document: string): FrontMatterResult<Record<string, unknown>> {
+function parseSkillDocument(rawDocument: string): { metadata: SkillMetadata; content: string } {
+  let parsed: FrontMatterResult<Record<string, unknown>>;
   try {
-    return frontMatter<Record<string, unknown>>(document);
+    parsed = frontMatter<Record<string, unknown>>(rawDocument.replace(/\r\n/g, '\n'));
   } catch {
     throw new Error(`Skill file has invalid YAML frontmatter in ${SKILL_FILE_NAME}`);
   }
-}
 
-function getRequiredMetadataString(metadata: Record<string, SkillMetadataValue>, key: 'name' | 'description'): string {
-  const value = metadata[key];
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`Skill frontmatter must include a non-empty "${key}" in ${SKILL_FILE_NAME}`);
-  }
-  return value.trim();
-}
-
-function parseSkillDocument(rawDocument: string): { metadata: SkillMetadata; content: string } {
-  const parsed = parseFrontmatterDocument(rawDocument.replace(/\r\n/g, '\n'));
   if (!parsed.frontmatter) {
     throw new Error(`Skill file is missing required YAML frontmatter in ${SKILL_FILE_NAME}`);
   }
 
-  const metadata = normalizeMetadata(parsed.attributes);
-  const name = getRequiredMetadataString(metadata, 'name');
-  const description = getRequiredMetadataString(metadata, 'description');
+  const attributes: Record<string, SkillMetadataValue> = {};
+  for (const [key, value] of Object.entries(parsed.attributes)) {
+    if (isSkillMetadataScalar(value)) {
+      attributes[key] = value;
+    } else if (Array.isArray(value) && value.every(isSkillMetadataScalar)) {
+      attributes[key] = value;
+    } else {
+      throw new Error(`Skill frontmatter field "${key}" must be a scalar or scalar array in ${SKILL_FILE_NAME}`);
+    }
+  }
+
+  const name = attributes.name;
+  const description = attributes.description;
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new Error(`Skill frontmatter must include a non-empty "name" in ${SKILL_FILE_NAME}`);
+  }
+  if (typeof description !== 'string' || description.trim() === '') {
+    throw new Error(`Skill frontmatter must include a non-empty "description" in ${SKILL_FILE_NAME}`);
+  }
 
   return {
-    metadata: {
-      ...metadata,
-      name,
-      description,
-    },
+    metadata: { ...attributes, name: name.trim(), description: description.trim() },
     content: parsed.body.trim(),
   };
 }
@@ -110,53 +95,22 @@ async function readOptionalResourcePaths(rootPath: string): Promise<SkillResourc
 
   for (const directoryName of OPTIONAL_RESOURCE_DIRS) {
     const candidatePath = path.join(rootPath, directoryName);
-    if (!(await statIfExists(candidatePath))?.isDirectory()) {continue;}
-    resourcePaths[directoryName] = await resolveSafeExistingPath(rootPath, candidatePath);
+    try {
+      const stats = await stat(candidatePath);
+      if (stats.isDirectory()) {
+        resourcePaths[directoryName] = await resolveSafeExistingPath(rootPath, candidatePath);
+      }
+    } catch {
+      // directory does not exist, skip
+    }
   }
 
   return resourcePaths;
 }
 
-function buildSkillIndex(skills: readonly AgentSkill[]): Map<string, AgentSkill> {
-  const skillIndex = new Map<string, AgentSkill>();
-
-  for (const skill of skills) {
-    if (skillIndex.has(skill.name)) {
-      throw new Error(`Duplicate skill name "${skill.name}" is not allowed`);
-    }
-
-    skillIndex.set(skill.name, skill);
-  }
-
-  return skillIndex;
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-async function statIfExists(filePath: string): Promise<Stats | undefined> {
-  try {
-    return await stat(filePath);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function statOrThrow(filePath: string, notFoundMessage: string): Promise<Stats> {
-  const stats = await statIfExists(filePath);
-  if (!stats) {
-    throw new Error(notFoundMessage);
-  }
-  return stats;
-}
-
 export async function loadSkill(skillPath: string): Promise<AgentSkill> {
   const resolvedRootPath = path.resolve(skillPath);
-  const rootStats = await statOrThrow(resolvedRootPath, `Skill directory not found: ${resolvedRootPath}`);
+  const rootStats = await stat(resolvedRootPath);
 
   if (!rootStats.isDirectory()) {
     throw new Error(`Skill path must be a directory: ${resolvedRootPath}`);
@@ -164,7 +118,7 @@ export async function loadSkill(skillPath: string): Promise<AgentSkill> {
 
   const rootPath = await realpath(resolvedRootPath);
   const entryPath = path.join(rootPath, SKILL_FILE_NAME);
-  const entryStats = await statOrThrow(entryPath, `Skill entry file not found: ${entryPath}`);
+  const entryStats = await stat(entryPath);
 
   if (!entryStats.isFile()) {
     throw new Error(`Skill entry path must be a file: ${entryPath}`);
@@ -187,10 +141,7 @@ export async function loadSkill(skillPath: string): Promise<AgentSkill> {
 
 export async function loadSkills(rootDirectoryPath: string): Promise<AgentSkill[]> {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
-  const directoryStats = await statOrThrow(
-    resolvedRootDirectoryPath,
-    `Skills root directory not found: ${resolvedRootDirectoryPath}`,
-  );
+  const directoryStats = await stat(resolvedRootDirectoryPath);
 
   if (!directoryStats.isDirectory()) {
     throw new Error(`Skills root path must be a directory: ${resolvedRootDirectoryPath}`);
@@ -205,12 +156,22 @@ export async function loadSkills(rootDirectoryPath: string): Promise<AgentSkill[
   const discoveredSkills: AgentSkill[] = [];
   for (const directoryName of skillDirectories) {
     const candidatePath = path.join(resolvedRootDirectoryPath, directoryName);
-    const candidateEntryPath = path.join(candidatePath, SKILL_FILE_NAME);
-    if (!(await statIfExists(candidateEntryPath))?.isFile()) {continue;}
-    discoveredSkills.push(await loadSkill(candidatePath));
+    try {
+      await stat(path.join(candidatePath, SKILL_FILE_NAME));
+      discoveredSkills.push(await loadSkill(candidatePath));
+    } catch {
+      // no SKILL.md, skip
+    }
   }
 
-  buildSkillIndex(discoveredSkills);
+  const names = new Set<string>();
+  for (const skill of discoveredSkills) {
+    if (names.has(skill.name)) {
+      throw new Error(`Duplicate skill name "${skill.name}" is not allowed`);
+    }
+    names.add(skill.name);
+  }
+
   return discoveredSkills;
 }
 
@@ -231,7 +192,7 @@ export function renderSkillsPrompt(skills: readonly AgentSkill[]): string {
 }
 
 export function createLoadSkillTool(skills: readonly AgentSkill[]): Tool {
-  const skillIndex = buildSkillIndex(skills);
+  const skillIndex = new Map(skills.map((skill) => [skill.name, skill]));
 
   return {
     name: LOAD_SKILL_TOOL_NAME,

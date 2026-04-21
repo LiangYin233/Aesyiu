@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { JSONSchema, Tool, ToolParameters, ToolResultEnvelope } from '../types/index.js';
+import type { JSONSchema, ToolParameters } from '../types/index.js';
 
 export function isZodSchema(obj: unknown): obj is z.ZodType<unknown> {
   return obj !== null
@@ -28,20 +28,4 @@ export function validateToolArguments(
   }
 
   return { success: true, data: validation.data };
-}
-
-export function encodeToolResultEnvelope<T>(envelope: ToolResultEnvelope<T>): string {
-  return JSON.stringify(envelope);
-}
-
-const warnedTools = new WeakSet<object>();
-
-export function warnIfJSONSchemaTool(tool: Tool): void {
-  if (!tool.parameters || isZodSchema(tool.parameters)) {return;}
-  if (warnedTools.has(tool)) {return;}
-  warnedTools.add(tool);
-  console.warn(
-    `[aesyiu] tool "${tool.name}" uses a JSON schema; arguments pass through unvalidated. ` +
-    'Provide a Zod schema to enable runtime validation.',
-  );
 }

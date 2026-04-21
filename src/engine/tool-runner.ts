@@ -1,22 +1,19 @@
 import type { AgentContext } from '../context/index.js';
-import { AesyiuRuntimeError } from '../error/index.js';
-import { encodeToolResultEnvelope, validateToolArguments, warnIfJSONSchemaTool } from '../tool/schema.js';
+import { validateToolArguments } from '../tool/schema.js';
 import type { Message, Tool, ToolCall } from '../types/index.js';
-import type { AfterToolCallHook, BeforeToolCallHook, ToolMiddleware, ToolMiddlewareContext } from './types.js';
+import type { ToolMiddleware } from './types.js';
 import {
   chainMiddleware,
-  classifyAbortOrTimeout,
   combineAbortSignals,
   getErrorMessage,
   isAbortError,
   rethrowProgrammingError,
-  runHooks,
 } from './utils.js';
 
 function toolFailureMessage(call: ToolCall, error: string): Message {
   return {
     role: 'tool',
-    content: encodeToolResultEnvelope({ success: false, error }),
+    content: JSON.stringify({ success: false, error }),
     tool_call_id: call.id,
   };
 }
@@ -27,13 +24,11 @@ export async function runToolCalls(
   ctx: AgentContext,
   signal: AbortSignal | undefined,
   toolMiddlewares: ToolMiddleware[],
-  beforeToolCallHooks: ReadonlyArray<BeforeToolCallHook>,
-  afterToolCallHooks: ReadonlyArray<AfterToolCallHook>,
 ): Promise<Message[]> {
   const toolAbort = new AbortController();
   const combinedSignal = combineAbortSignals(signal, toolAbort.signal);
   const promises = toolCalls.map((call) =>
-    runToolCall(call, availableTools, ctx, combinedSignal, toolMiddlewares, beforeToolCallHooks, afterToolCallHooks),
+    runToolCall(call, availableTools, ctx, combinedSignal, toolMiddlewares),
   );
 
   try {
@@ -42,7 +37,7 @@ export async function runToolCalls(
     toolAbort.abort();
     await Promise.allSettled(promises);
     rethrowProgrammingError(error);
-    throw new AesyiuRuntimeError(classifyAbortOrTimeout(error, signal) ?? 'tool', error);
+    throw new Error(getErrorMessage(error));
   }
 }
 
@@ -52,15 +47,11 @@ async function runToolCall(
   ctx: AgentContext,
   signal: AbortSignal | undefined,
   toolMiddlewares: ToolMiddleware[],
-  beforeToolCallHooks: ReadonlyArray<BeforeToolCallHook>,
-  afterToolCallHooks: ReadonlyArray<AfterToolCallHook>,
 ): Promise<Message> {
   const tool = availableTools.get(call.name);
   if (!tool) {
     return toolFailureMessage(call, `Tool "${call.name}" not found`);
   }
-
-  warnIfJSONSchemaTool(tool);
 
   let parsedArgs: unknown;
   try {
@@ -74,7 +65,7 @@ async function runToolCall(
     return toolFailureMessage(call, validation.error);
   }
 
-  const middlewareContext: ToolMiddlewareContext = {
+  const middlewareContext = {
     tool,
     toolCall: call,
     args: validation.data,
@@ -82,23 +73,15 @@ async function runToolCall(
   };
 
   try {
-    const hookedContext = await runHooks(beforeToolCallHooks, middlewareContext);
     const result = await chainMiddleware(
       toolMiddlewares,
-      hookedContext,
-      () => tool.execute(hookedContext.args as never, ctx, { signal }) as Promise<unknown>,
+      middlewareContext,
+      () => tool.execute(middlewareContext.args, ctx, { signal }) as Promise<unknown>,
     );
-    const finalContext = await runHooks(afterToolCallHooks, {
-      tool,
-      toolCall: call,
-      args: hookedContext.args,
-      result,
-      agentContext: ctx,
-    });
 
     return {
       role: 'tool',
-      content: encodeToolResultEnvelope({ success: true, result: finalContext.result }),
+      content: JSON.stringify({ success: true, result }),
       tool_call_id: call.id,
     };
   } catch (error) {

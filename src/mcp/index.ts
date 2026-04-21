@@ -47,43 +47,23 @@ function ensureObjectArguments(args: unknown): Record<string, unknown> {
   return args as Record<string, unknown>;
 }
 
-function extractTextContent(content: CallToolResult['content']): string | undefined {
-  const textParts = content
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text);
-
-  if (textParts.length === 0) {
-    return undefined;
-  }
-
-  return textParts.join('\n');
-}
-
-function extractToolError(result: CallToolResult): string {
-  const textContent = extractTextContent(result.content);
-  if (textContent) {
-    return textContent;
-  }
-
-  return 'MCP tool execution failed';
-}
-
 function normalizeToolResult(result: Awaited<ReturnType<Client['callTool']>>): unknown {
   if ('toolResult' in result) {
     return result.toolResult;
   }
 
   if (result.isError) {
-    throw new Error(extractToolError(result));
+    const text = result.content.map((c) => c.type === 'text' ? c.text : '').join('\n');
+    throw new Error(text || 'MCP tool execution failed');
   }
 
   if (result.structuredContent !== undefined) {
     return result.structuredContent;
   }
 
-  const textContent = extractTextContent(result.content);
-  if (textContent !== undefined) {
-    return textContent;
+  const text = result.content.map((c) => c.type === 'text' ? c.text : '').join('\n');
+  if (text) {
+    return text;
   }
 
   return result.content;
@@ -121,25 +101,6 @@ export class MCPManager {
       await this.safeClose(client);
       throw new Error(`Failed to register MCP server "${config.name}": ${getErrorMessage(error)}`);
     }
-  }
-
-  public async registerServers(configs: MCPServerConfig[]): Promise<Tool[]> {
-    const tools: Tool[] = [];
-    const registered: string[] = [];
-
-    try {
-      for (const config of configs) {
-        tools.push(...await this.registerServer(config));
-        registered.push(config.name);
-      }
-    } catch (error) {
-      for (const name of registered) {
-        await this.unregisterServer(name).catch(() => {});
-      }
-      throw error;
-    }
-
-    return tools;
   }
 
   public async unregisterServer(name: string): Promise<string[]> {

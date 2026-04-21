@@ -1,25 +1,13 @@
 import type { AgentContext } from '../context/index.js';
-import { AesyiuProgrammingError, isProgrammingError, isRuntimeError } from '../error/index.js';
-import type { EngineErrorSource, EngineResult } from '../types/index.js';
+import { AesyiuProgrammingError, isProgrammingError } from '../error/index.js';
+import type { EngineResult } from '../types/index.js';
 import type { Middleware } from './types.js';
 
 type MiddlewareFn<TCtx, TResult> = (ctx: TCtx, next: () => Promise<TResult>) => Promise<TResult>;
 
-export async function runHooks<T>(hooks: ReadonlyArray<(ctx: T) => void | Promise<void>>, ctx: T): Promise<T> {
-  for (const hook of hooks) {
-    await hook(ctx);
-  }
-  return ctx;
-}
-
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {return error.message;}
   return String(error);
-}
-
-export function getCauseString(error: unknown): string | undefined {
-  if (error instanceof Error) {return error.stack ?? error.message;}
-  return error !== undefined ? String(error) : undefined;
 }
 
 export function toError(error: unknown): Error {
@@ -37,16 +25,6 @@ export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
     return true;
   }
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
-}
-
-export function classifyAbortOrTimeout(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-  if (error instanceof Error && error.name === 'TimeoutError') {return 'timeout';}
-  if (isAbortError(error, signal)) {return 'aborted';}
-  return undefined;
-}
-
-export function getErrorSource(error: unknown): EngineErrorSource | undefined {
-  return isRuntimeError(error) ? error.source : undefined;
 }
 
 export function combineAbortSignals(signal: AbortSignal | undefined, fallback: AbortSignal): AbortSignal {
