@@ -8,6 +8,7 @@ import type {
   RunStreamEvent,
   TokenUsage,
   Tool,
+  ToolCall,
 } from '../types/index.js';
 import type { LLMMiddleware, ToolMiddleware } from './types.js';
 import { prepareOutboundMessages } from './preparation.js';
@@ -66,8 +67,7 @@ export class ExecutionLoop {
         assistantMessage = result.message;
         usage = result.usage;
       } catch (error) {
-        rethrowProgrammingError(error);
-        return this.createErrorResult(ctx, error, this.getErrorSource(error, options.signal) ?? 'provider');
+        return this.handleStepError(ctx, error, options.signal, 'provider');
       }
 
       ctx.addMessage(assistantMessage);
@@ -76,8 +76,7 @@ export class ExecutionLoop {
       try {
         await this.memoryManager.checkAndOptimize(ctx, usage);
       } catch (error) {
-        rethrowProgrammingError(error);
-        return this.createErrorResult(ctx, error, 'memory');
+        return this.handleStepError(ctx, error, options.signal, 'memory');
       }
 
       if (!assistantMessage.tool_calls?.length) {
@@ -99,8 +98,7 @@ export class ExecutionLoop {
           options.toolMiddlewares,
         );
       } catch (error) {
-        rethrowProgrammingError(error);
-        return this.createErrorResult(ctx, error, this.getErrorSource(error, options.signal) ?? 'tool');
+        return this.handleStepError(ctx, error, options.signal, 'tool');
       }
       ctx.addMessages(toolResults);
 
@@ -129,7 +127,7 @@ export class ExecutionLoop {
     );
 
     let content: string | null = null;
-    let toolCalls: import('../types/index.js').ToolCall[] | undefined;
+    let toolCalls: ToolCall[] | undefined;
     let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
     for await (const event of stream) {
@@ -176,6 +174,11 @@ export class ExecutionLoop {
       ...this.createResultBase(ctx),
       error: { message: getErrorMessage(error), source },
     };
+  }
+
+  private handleStepError(ctx: AgentContext, error: unknown, signal: AbortSignal | undefined, fallbackSource: EngineErrorSource): EngineResult {
+    rethrowProgrammingError(error);
+    return this.createErrorResult(ctx, error, this.getErrorSource(error, signal) ?? fallbackSource);
   }
 
   private getErrorSource(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {

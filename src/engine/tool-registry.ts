@@ -39,10 +39,11 @@ export class ToolRegistry {
     return Array.from(this.globalTools.values());
   }
 
-  resolve(names?: string[]): Map<string, Tool> {
-    if (!names) {
-      return new Map(this.globalTools);
-    }
+  getAll(): ReadonlyMap<string, Tool> {
+    return this.globalTools;
+  }
+
+  resolve(names: string[]): Map<string, Tool> {
     const result = new Map<string, Tool>();
     for (const name of names) {
       const tool = this.globalTools.get(name);

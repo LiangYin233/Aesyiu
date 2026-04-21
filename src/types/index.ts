@@ -14,7 +14,6 @@ export interface MessageMeta {
   skillPrompt?: boolean;
   promptSection?: string;
   internal?: boolean;
-  [key: string]: unknown;
 }
 
 export interface Message {

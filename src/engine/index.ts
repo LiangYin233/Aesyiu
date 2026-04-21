@@ -1,6 +1,6 @@
 import type { AgentContext } from '../context/index.js';
 import { AesyiuProgrammingError } from '../error/index.js';
-import type { EngineResult, Message, RunStreamEvent } from '../types/index.js';
+import type { EngineResult, Message, RunStreamEvent, Tool } from '../types/index.js';
 import { MCPManager, type MCPServerConfig } from '../mcp/index.js';
 import { MemoryManager } from '../memory/index.js';
 import { createLoadSkillTool, type AgentSkill } from '../skill/index.js';
@@ -58,12 +58,12 @@ export class AesyiuEngine {
     return this;
   }
 
-  public registerTool(tool: import('../types/index.js').Tool): this {
+  public registerTool(tool: Tool): this {
     this.toolRegistry.register(tool);
     return this;
   }
 
-  public getTools(): import('../types/index.js').Tool[] {
+  public getTools(): Tool[] {
     return this.toolRegistry.getTools();
   }
 
@@ -128,7 +128,7 @@ export class AesyiuEngine {
   }
 
   private prepareExecution(input: Message, ctx: AgentContext, options?: RunOptions) {
-    return prepareRun(input, ctx, options, this.toolRegistry.resolve(), this.registeredSkills);
+    return prepareRun(input, ctx, options, this.toolRegistry.getAll(), this.registeredSkills);
   }
 
   private createLoop(): ExecutionLoop {

@@ -1,4 +1,4 @@
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import frontMatter from 'front-matter';
 import type { FrontMatterResult } from 'front-matter';
@@ -76,20 +76,6 @@ function parseSkillDocument(rawDocument: string): { metadata: SkillMetadata; con
   };
 }
 
-async function resolveSafeExistingPath(rootPath: string, candidatePath: string): Promise<string> {
-  const [rootRealPath, candidateRealPath] = await Promise.all([
-    realpath(rootPath),
-    realpath(candidatePath),
-  ]);
-  const relative = path.relative(rootRealPath, candidateRealPath);
-
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`Resolved path "${candidateRealPath}" escapes skill root "${rootRealPath}"`);
-  }
-
-  return candidateRealPath;
-}
-
 async function readOptionalResourcePaths(rootPath: string): Promise<SkillResourcePaths> {
   const resourcePaths: SkillResourcePaths = {};
 
@@ -98,7 +84,7 @@ async function readOptionalResourcePaths(rootPath: string): Promise<SkillResourc
     try {
       const stats = await stat(candidatePath);
       if (stats.isDirectory()) {
-        resourcePaths[directoryName] = await resolveSafeExistingPath(rootPath, candidatePath);
+        resourcePaths[directoryName] = candidatePath;
       }
     } catch {
       // directory does not exist, skip
@@ -116,16 +102,14 @@ export async function loadSkill(skillPath: string): Promise<AgentSkill> {
     throw new Error(`Skill path must be a directory: ${resolvedRootPath}`);
   }
 
-  const rootPath = await realpath(resolvedRootPath);
-  const entryPath = path.join(rootPath, SKILL_FILE_NAME);
+  const entryPath = path.join(resolvedRootPath, SKILL_FILE_NAME);
   const entryStats = await stat(entryPath);
 
   if (!entryStats.isFile()) {
     throw new Error(`Skill entry path must be a file: ${entryPath}`);
   }
 
-  const entryRealPath = await resolveSafeExistingPath(rootPath, entryPath);
-  const rawDocument = await readFile(entryRealPath, 'utf8');
+  const rawDocument = await readFile(entryPath, 'utf8');
   const { metadata, content } = parseSkillDocument(rawDocument);
 
   return {
@@ -133,9 +117,9 @@ export async function loadSkill(skillPath: string): Promise<AgentSkill> {
     description: metadata.description,
     metadata,
     content,
-    rootPath,
-    entryPath: entryRealPath,
-    resourcePaths: await readOptionalResourcePaths(rootPath),
+    rootPath: resolvedRootPath,
+    entryPath,
+    resourcePaths: await readOptionalResourcePaths(resolvedRootPath),
   };
 }
 
