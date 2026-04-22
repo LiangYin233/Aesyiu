@@ -1,7 +1,7 @@
-# OpenSpec
-openspec
-.opencode
+AGENTS.md
+.trellis
 .claude
+.opencode
 
 # Build output
 dist
@@ -23,7 +23,6 @@ npm-debug.log*
 .env.*.local
 
 # IDE
-.idea
 .vscode
 *.swp
 *.swo

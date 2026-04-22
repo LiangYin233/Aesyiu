@@ -161,7 +161,7 @@ export class OpenAICompletionProvider extends LLMProvider {
   ): Promise<{ message: Message; usage: TokenUsage }> {
     const modelDef = this.resolveModel(model);
     const sdkMessages = this.toSDKMessages(messages);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       model: modelDef.id,
       messages: sdkMessages,
     };
@@ -171,7 +171,7 @@ export class OpenAICompletionProvider extends LLMProvider {
     }
     const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
     const response = await this.client.chat.completions.create(
-      merged as OpenAI.ChatCompletionCreateParamsNonStreaming,
+      merged as unknown as OpenAI.ChatCompletionCreateParamsNonStreaming,
       options?.signal ? { signal: options.signal } : undefined,
     );
     return this.fromSDKResponse(response);
@@ -185,7 +185,7 @@ export class OpenAICompletionProvider extends LLMProvider {
   ): AsyncGenerator<StreamEvent, void> {
     const modelDef = this.resolveModel(model);
     const sdkMessages = this.toSDKMessages(messages);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       model: modelDef.id,
       messages: sdkMessages,
       stream: true,
@@ -198,7 +198,7 @@ export class OpenAICompletionProvider extends LLMProvider {
     const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
 
     const stream = await this.client.chat.completions.create(
-      merged as OpenAI.ChatCompletionCreateParamsStreaming,
+      merged as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
       options?.signal ? { signal: options.signal } : undefined,
     );
 

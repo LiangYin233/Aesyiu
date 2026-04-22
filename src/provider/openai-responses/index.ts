@@ -223,7 +223,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
   ): Promise<{ message: Message; usage: TokenUsage }> {
     const modelDef = this.resolveModel(model);
     const input = this.toSDKInput(messages);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       model: modelDef.id,
       input,
     };
@@ -233,7 +233,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
     }
     const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
     const response = await this.client.responses.create(
-      merged as OpenAI.Responses.ResponseCreateParamsNonStreaming,
+      merged as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
       options?.signal ? { signal: options.signal } : undefined,
     );
     return this.fromSDKResponse(response);
@@ -247,7 +247,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
   ): AsyncGenerator<StreamEvent, void> {
     const modelDef = this.resolveModel(model);
     const input = this.toSDKInput(messages);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       model: modelDef.id,
       input,
       stream: true,
@@ -259,7 +259,7 @@ export class OpenAIResponsesProvider extends LLMProvider {
     const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
 
     const stream = await this.client.responses.create(
-      merged as OpenAI.Responses.ResponseCreateParamsStreaming,
+      merged as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
       options?.signal ? { signal: options.signal } : undefined,
     );
 

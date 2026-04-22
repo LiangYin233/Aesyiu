@@ -1,11 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, type StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult, Tool as MCPTool } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool } from '../types/index.js';
 
+const { version: packageVersion } = JSON.parse(
+  readFileSync(join(__dirname, '../../package.json'), 'utf8'),
+) as { version: string };
+
 const AESYIU_CLIENT_INFO = {
   name: 'aesyiu',
-  version: '0.3.0',
+  version: packageVersion,
 };
 
 type RegisteredMCPServer = {

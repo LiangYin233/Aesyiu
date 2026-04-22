@@ -67,6 +67,8 @@ export class ToolRegistry {
   }
 
   delete(name: string): boolean {
+    this.mcpTools.delete(name);
+    this.overriddenMCPTools.delete(name);
     return this.globalTools.delete(name);
   }
 

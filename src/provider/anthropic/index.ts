@@ -212,7 +212,7 @@ export class AnthropicProvider extends LLMProvider {
   ): Promise<{ message: Message; usage: TokenUsage }> {
     const modelDef = this.resolveModel(model);
     const { system, messages: sdkMessages } = this.toSDKMessages(messages);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       model: modelDef.id,
       max_tokens: modelDef.maxOutputTokens,
       messages: sdkMessages,
@@ -226,7 +226,7 @@ export class AnthropicProvider extends LLMProvider {
     }
     const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
     const response = await this.client.messages.create(
-      merged as Anthropic.MessageCreateParamsNonStreaming,
+      merged as unknown as Anthropic.MessageCreateParamsNonStreaming,
       options?.signal ? { signal: options.signal } : undefined,
     );
     return this.fromSDKResponse(response);
@@ -240,7 +240,7 @@ export class AnthropicProvider extends LLMProvider {
   ): AsyncGenerator<StreamEvent, void> {
     const modelDef = this.resolveModel(model);
     const { system, messages: sdkMessages } = this.toSDKMessages(messages);
-    const params: Record<string, any> = {
+    const params: Record<string, unknown> = {
       model: modelDef.id,
       max_tokens: modelDef.maxOutputTokens,
       messages: sdkMessages,
@@ -255,7 +255,7 @@ export class AnthropicProvider extends LLMProvider {
     const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
 
     const stream = this.client.messages.stream(
-      merged as Anthropic.MessageCreateParamsNonStreaming,
+      merged as unknown as Anthropic.MessageCreateParamsNonStreaming,
       options?.signal ? { signal: options.signal } : undefined,
     );
 
