@@ -20,13 +20,14 @@ src/
 ├── context/
 │   └── index.ts          # AgentContext: message history, state, LLM switching
 ├── engine/
-│   ├── index.ts          # AesyiuEngine, public middleware types
-│   ├── execution-loop.ts # Step-by-step agent execution loop
-│   ├── stream.ts         # Middleware-wrapped stream runner
-│   ├── event-queue.ts    # Async event queue for stream bridging
-│   ├── preparation.ts    # Run preparation (tool/skill resolution, compatibility mode)
-│   ├── types.ts          # Engine-specific types (Middleware, LLMMiddleware, etc.)
-│   └── utils.ts          # Engine utilities (chainMiddleware, combineAbortSignals, etc.)
+│   ├── index.ts              # AesyiuEngine, public middleware types
+│   ├── execution-loop.ts     # Step-by-step agent execution loop
+│   ├── stream.ts             # Middleware-wrapped stream runner
+│   ├── stream-consumer.ts    # Shared LLM stream parsing (text_delta, tool_calls, usage)
+│   ├── event-queue.ts        # Async event queue for stream bridging
+│   ├── preparation.ts        # Run preparation (tool/skill resolution, compatibility mode)
+│   ├── types.ts              # Engine-specific types (Middleware, LLMMiddleware, etc.)
+│   └── utils.ts              # Engine utilities (chainMiddleware, combineAbortSignals, etc.)
 ├── provider/
 │   ├── index.ts          # LLMProvider abstract base class
 │   ├── factory/
