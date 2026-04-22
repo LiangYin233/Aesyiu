@@ -1,6 +1,6 @@
 {
   "name": "aesyiu",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Stateless, high-concurrency AI Agent framework with onion-model middleware and dynamic LLM switching",
   "license": "MIT",
   "engines": {
@@ -37,7 +37,6 @@
     "@typescript-eslint/parser": "^8.15.0",
     "eslint": "^9.14.0",
     "eslint-plugin-n": "^17.24.0",
-    "typescript": "^5.6.3",
-    "vitest": "^2.1.5"
+    "typescript": "^5.6.3"
   }
 }

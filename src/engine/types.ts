@@ -11,6 +11,8 @@ export interface LLMMiddlewareContext {
   tools: Tool[];
   options: GenerateOptions;
   readonly agentContext: AgentContext;
+  readonly streamOutput: boolean;
+  responseStarted: boolean;
 }
 
 export type LLMMiddleware = (

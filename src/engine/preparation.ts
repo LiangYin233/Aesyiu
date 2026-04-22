@@ -54,6 +54,9 @@ export function prepareRun(
   registeredSkills: readonly AgentSkill[],
 ): { availableTools: Map<string, Tool>; signal: AbortSignal | undefined } {
   const availableTools = resolveRunTools(globalTools, options);
+  if (options?.signal?.aborted) {
+    return { availableTools, signal: options.signal };
+  }
   injectSkillPrompt(ctx, resolveRunSkills(registeredSkills, options));
   ctx.addMessage(input);
   return { availableTools, signal: options?.signal };

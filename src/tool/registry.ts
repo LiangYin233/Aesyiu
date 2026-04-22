@@ -4,6 +4,7 @@ import { isZodSchema } from './schema.js';
 export class ToolRegistry {
   private globalTools = new Map<string, Tool>();
   private mcpTools = new Map<string, Tool>();
+  private overriddenMCPTools = new Map<string, Tool>();
 
   register(tool: Tool): void {
     if (tool.parameters && !isZodSchema(tool.parameters)) {
@@ -17,6 +18,10 @@ export class ToolRegistry {
 
   registerMCP(tools: Tool[]): void {
     for (const tool of tools) {
+      const existing = this.globalTools.get(tool.name);
+      if (existing && existing !== tool && !this.mcpTools.has(tool.name) && !this.overriddenMCPTools.has(tool.name)) {
+        this.overriddenMCPTools.set(tool.name, existing);
+      }
       this.globalTools.set(tool.name, tool);
       this.mcpTools.set(tool.name, tool);
     }
@@ -26,11 +31,17 @@ export class ToolRegistry {
     const removed: string[] = [];
     for (const toolName of toolNames) {
       const recorded = this.mcpTools.get(toolName);
+      const overridden = this.overriddenMCPTools.get(toolName);
       this.mcpTools.delete(toolName);
       if (recorded && this.globalTools.get(toolName) === recorded) {
-        this.globalTools.delete(toolName);
+        if (overridden) {
+          this.globalTools.set(toolName, overridden);
+        } else {
+          this.globalTools.delete(toolName);
+        }
         removed.push(toolName);
       }
+      this.overriddenMCPTools.delete(toolName);
     }
     return removed;
   }
@@ -66,5 +77,6 @@ export class ToolRegistry {
   clear(): void {
     this.globalTools.clear();
     this.mcpTools.clear();
+    this.overriddenMCPTools.clear();
   }
 }

@@ -22,7 +22,10 @@ export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted && error === signal.reason) {
     return true;
   }
-  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+  if (signal?.aborted && error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+    return true;
+  }
+  return false;
 }
 
 export function combineAbortSignals(signal: AbortSignal | undefined, fallback: AbortSignal): AbortSignal {

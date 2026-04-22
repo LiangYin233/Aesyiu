@@ -5,7 +5,7 @@ import type { Tool } from '../types/index.js';
 
 const AESYIU_CLIENT_INFO = {
   name: 'aesyiu',
-  version: '0.2.0',
+  version: '0.3.0',
 };
 
 type RegisteredMCPServer = {

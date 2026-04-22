@@ -203,11 +203,16 @@ export class OpenAICompletionProvider extends LLMProvider {
     );
 
     const parser = new StreamParser();
+    let responseStarted = false;
 
     for await (const chunk of stream) {
       parser.setUsage(chunk.usage ?? undefined);
       const delta = chunk.choices[0]?.delta;
       if (!delta) {continue;}
+      if (!responseStarted && (Boolean(delta.content) || Boolean(delta.tool_calls?.length))) {
+        responseStarted = true;
+        yield { type: 'response_started' };
+      }
       const event = parser.consume(delta);
       if (event) {yield event;}
     }

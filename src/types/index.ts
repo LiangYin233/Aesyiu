@@ -10,10 +10,7 @@ export interface ToolCall {
 }
 
 export interface MessageMeta {
-  isPinned?: boolean;
-  skillPrompt?: boolean;
   promptSection?: string;
-  internal?: boolean;
 }
 
 export interface Message {
@@ -56,15 +53,8 @@ export interface EngineErrorInfo {
 export interface EngineResult {
   status: EngineResultStatus;
   messages: Message[];
-  visibleMessages: Message[];
   usage: TokenUsage;
   error?: EngineErrorInfo;
-}
-
-export interface ToolResultEnvelope<T = unknown> {
-  success: boolean;
-  result?: T;
-  error?: string;
 }
 
 export type JSONSchema = {
@@ -88,6 +78,7 @@ export interface Tool {
 }
 
 export type StreamEvent =
+  | { type: 'response_started' }
   | { type: 'text'; delta: string; content: string }
   | { type: 'tool_calls'; toolCalls: ToolCall[] }
   | { type: 'usage'; usage: TokenUsage };

@@ -86,6 +86,9 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
       try {
         return await next();
       } catch (error) {
+        if (ctx.streamOutput && ctx.responseStarted) {
+          throw error;
+        }
         if (attempt >= maxRetries || !shouldRetry(error, attempt)) {
           throw error;
         }
@@ -112,6 +115,14 @@ export function timeoutMiddleware(options: TimeoutMiddlewareOptions): LLMMiddlew
       ...ctx.options,
       signal: previousSignal ? AbortSignal.any([previousSignal, timeoutSignal]) : timeoutSignal,
     };
-    return next();
+
+    try {
+      return await next();
+    } catch (error) {
+      if (timeoutSignal.aborted && !previousSignal?.aborted) {
+        throw timeoutSignal.reason ?? error;
+      }
+      throw error;
+    }
   };
 }

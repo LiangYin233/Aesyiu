@@ -13,13 +13,12 @@ export type {
   Tool,
   ToolExecutionOptions,
   ToolParameters,
-  ToolResultEnvelope,
   JSONSchema,
   StreamEvent,
   RunStreamEvent,
 } from './types/index.js';
-export { AgentContext, filterVisibleMessages } from './context/index.js';
-export type { AgentContextConfig, MessageInput, PromptSection } from './context/index.js';
+export { AgentContext } from './context/index.js';
+export type { AgentContextConfig, MessageInput } from './context/index.js';
 export { LLMProvider } from './provider/index.js';
 export type { GenerateOptions } from './provider/index.js';
 export { createLLMProvider, getDefaultModel, getDefaultModels } from './provider/factory/index.js';

@@ -5,26 +5,28 @@ import { combineAbortSignals, runUserMiddleware, toError } from './utils.js';
 
 class EventQueue<T> {
   private buffer: T[] = [];
-  private waiters: Array<(value: IteratorResult<T, void>) => void> = [];
+  private pending: ((value: IteratorResult<T, void>) => void) | null = null;
   private closed = false;
 
   push(item: T): void {
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter({ value: item, done: false });
-    } else {
-      this.buffer.push(item);
+    if (this.closed) {return;}
+    if (this.pending) {
+      this.pending({ value: item, done: false });
+      this.pending = null;
+      return;
     }
+    this.buffer.push(item);
   }
 
   close(): void {
     this.closed = true;
-    while (this.waiters.length > 0) {
-      this.waiters.shift()!({ value: undefined, done: true });
+    if (this.pending) {
+      this.pending({ value: undefined, done: true });
+      this.pending = null;
     }
   }
 
-  async *consume(): AsyncGenerator<T, void, void> {
+  async *[Symbol.asyncIterator](): AsyncGenerator<T, void> {
     while (true) {
       const item = this.buffer.shift();
       if (item !== undefined) {
@@ -33,7 +35,7 @@ class EventQueue<T> {
       }
       if (this.closed) {return;}
       const result = await new Promise<IteratorResult<T, void>>((resolve) => {
-        this.waiters.push(resolve);
+        this.pending = resolve;
       });
       if (result.done) {return;}
       yield result.value;
@@ -80,7 +82,7 @@ export async function* runStreamWithMiddleware(
   })();
 
   try {
-    for await (const event of queue.consume()) {
+    for await (const event of queue) {
       yield event;
     }
     await runner;

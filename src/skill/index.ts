@@ -141,11 +141,18 @@ export async function loadSkills(rootDirectoryPath: string): Promise<AgentSkill[
   for (const directoryName of skillDirectories) {
     const candidatePath = path.join(resolvedRootDirectoryPath, directoryName);
     try {
-      await stat(path.join(candidatePath, SKILL_FILE_NAME));
-      discoveredSkills.push(await loadSkill(candidatePath));
-    } catch {
-      // no SKILL.md, skip
+      const entryStats = await stat(path.join(candidatePath, SKILL_FILE_NAME));
+      if (!entryStats.isFile()) {
+        continue;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        continue;
+      }
+      throw error;
     }
+
+    discoveredSkills.push(await loadSkill(candidatePath));
   }
 
   const names = new Set<string>();
@@ -185,7 +192,11 @@ export function createLoadSkillTool(skills: readonly AgentSkill[]): Tool {
       name: z.string().min(1).describe('The skill name to load.'),
     }),
     execute: async (args: unknown) => {
-      const { name } = args as { name: string };
+      const parsed = z.object({ name: z.string().min(1) }).safeParse(args);
+      if (!parsed.success) {
+        throw new Error(`Invalid arguments for loadskill: ${parsed.error.message}`);
+      }
+      const { name } = parsed.data;
       const skill = skillIndex.get(name);
 
       if (!skill) {

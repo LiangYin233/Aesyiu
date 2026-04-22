@@ -119,8 +119,11 @@ export class AesyiuEngine {
   }
 
   public async dispose(): Promise<void> {
-    await this.mcpManager.dispose();
-    this.toolRegistry.clear();
+    try {
+      await this.mcpManager.dispose();
+    } finally {
+      this.toolRegistry.clear();
+    }
   }
 
   public async [Symbol.asyncDispose](): Promise<void> {
@@ -147,6 +150,7 @@ export class AesyiuEngine {
       ctx,
       () => consumeGenerator(loop.run(ctx, availableTools, {
         signal,
+        streamOutput: false,
         llmMiddlewares: this.llmMiddlewares,
         toolMiddlewares: this.toolMiddlewares,
       })),
@@ -166,6 +170,7 @@ export class AesyiuEngine {
       signal,
       (mctx, msignal) => loop.run(mctx, availableTools, {
         signal: msignal,
+        streamOutput: true,
         llmMiddlewares: this.llmMiddlewares,
         toolMiddlewares: this.toolMiddlewares,
       }),

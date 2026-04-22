@@ -34,9 +34,13 @@ export async function runToolCalls(
   try {
     return await Promise.all(promises);
   } catch (error) {
+    const isExternalAbort = isAbortError(error, signal);
     toolAbort.abort();
     await Promise.allSettled(promises);
     rethrowProgrammingError(error);
+    if (isExternalAbort) {
+      throw error;
+    }
     throw new Error(getErrorMessage(error));
   }
 }
@@ -45,7 +49,7 @@ async function runToolCall(
   call: ToolCall,
   availableTools: Map<string, Tool>,
   ctx: AgentContext,
-  signal: AbortSignal | undefined,
+  signal: AbortSignal,
   toolMiddlewares: ToolMiddleware[],
 ): Promise<Message> {
   const tool = availableTools.get(call.name);

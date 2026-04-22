@@ -10,13 +10,8 @@ export interface AgentContextConfig {
 
 export type MessageInput = Omit<Message, 'id'> & { id?: string };
 
-export interface PromptSection {
-  content: string;
-  pinned?: boolean;
-}
-
-export function filterVisibleMessages(messages: readonly Message[]): Message[] {
-  return messages.filter((message) => !message._meta?.internal);
+function cloneInitialState(initialState?: Record<string, unknown>): Record<string, unknown> {
+  return initialState ? structuredClone(initialState) : {};
 }
 
 export class AgentContext {
@@ -27,7 +22,7 @@ export class AgentContext {
   public activeModel!: ModelDefinition;
 
   constructor(config: AgentContextConfig) {
-    this.state = config.initialState ?? {};
+    this.state = cloneInitialState(config.initialState);
     this.sessionUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     this.switchLLM(config.provider, config.modelId);
   }
@@ -67,12 +62,11 @@ export class AgentContext {
   }
 
   public replaceMessages(messages: MessageInput[]): void {
-    this.clearMessages();
-    this.addMessages(messages);
+    this._messages = messages.map((message) => this.ensureMessageId(message));
   }
 
   public setSystemPrompt(name: string, content: string): void {
-    const meta: MessageMeta = { isPinned: true, promptSection: name, internal: true };
+    const meta: MessageMeta = { promptSection: name };
     const existing = this._messages.find((m) => m._meta?.promptSection === name);
     if (existing?.id) {
       const idx = this._messages.findIndex((m) => m.id === existing.id);

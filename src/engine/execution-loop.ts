@@ -1,5 +1,4 @@
 import type { AgentContext } from '../context/index.js';
-import { filterVisibleMessages } from '../context/index.js';
 import type { MemoryManager } from '../memory/index.js';
 import type {
   EngineErrorSource,
@@ -10,12 +9,52 @@ import type {
   Tool,
   ToolCall,
 } from '../types/index.js';
-import type { LLMMiddleware, ToolMiddleware } from './types.js';
+import type { LLMMiddleware, LLMMiddlewareContext, ToolMiddleware } from './types.js';
 import { prepareOutboundMessages } from './preparation.js';
 import { runToolCalls } from '../tool/runner.js';
-import { chainMiddleware, getErrorMessage, rethrowProgrammingError } from './utils.js';
+import { chainMiddleware, combineAbortSignals, getErrorMessage, rethrowProgrammingError, toError } from './utils.js';
 
 type LLMOperationResult = { message: Message; usage: TokenUsage };
+
+class EventQueue<T> {
+  private buffer: T[] = [];
+  private pending: ((value: IteratorResult<T, void>) => void) | null = null;
+  private closed = false;
+
+  push(item: T): void {
+    if (this.closed) {return;}
+    if (this.pending) {
+      this.pending({ value: item, done: false });
+      this.pending = null;
+      return;
+    }
+    this.buffer.push(item);
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.pending) {
+      this.pending({ value: undefined, done: true });
+      this.pending = null;
+    }
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<T, void> {
+    while (true) {
+      const item = this.buffer.shift();
+      if (item !== undefined) {
+        yield item;
+        continue;
+      }
+      if (this.closed) {return;}
+      const result = await new Promise<IteratorResult<T, void>>((resolve) => {
+        this.pending = resolve;
+      });
+      if (result.done) {return;}
+      yield result.value;
+    }
+  }
+}
 
 interface ExecutionLoopConfig {
   maxSteps: number;
@@ -39,6 +78,7 @@ export class ExecutionLoop {
     tools: Map<string, Tool>,
     options: {
       signal?: AbortSignal;
+      streamOutput: boolean;
       llmMiddlewares: LLMMiddleware[];
       toolMiddlewares: ToolMiddleware[];
     },
@@ -63,7 +103,14 @@ export class ExecutionLoop {
       let usage: TokenUsage;
       try {
         const outbound = prepareOutboundMessages([...ctx.messages], this.compatibilityMode);
-        const result = yield* this.streamLLMStep(ctx, outbound, toolList, options.llmMiddlewares, options.signal);
+        const result = yield* this.streamLLMStep(
+          ctx,
+          outbound,
+          toolList,
+          options.llmMiddlewares,
+          options.streamOutput,
+          options.signal,
+        );
         assistantMessage = result.message;
         usage = result.usage;
       } catch (error) {
@@ -74,7 +121,7 @@ export class ExecutionLoop {
       yield { type: 'assistant_message', message: assistantMessage };
 
       try {
-        await this.memoryManager.checkAndOptimize(ctx, usage);
+        await this.memoryManager.checkAndOptimize(ctx, usage, options.signal);
       } catch (error) {
         return this.handleStepError(ctx, error, options.signal, 'memory');
       }
@@ -102,6 +149,12 @@ export class ExecutionLoop {
       }
       ctx.addMessages(toolResults);
 
+      try {
+        await this.memoryManager.optimizeIfNeeded(ctx, undefined, options.signal);
+      } catch (error) {
+        return this.handleStepError(ctx, error, options.signal, 'memory');
+      }
+
       for (const result of toolResults) {
         yield { type: 'tool_result', message: result };
       }
@@ -116,51 +169,143 @@ export class ExecutionLoop {
     ctx: AgentContext,
     messages: Message[],
     tools: Tool[],
-    _llmMiddlewares: LLMMiddleware[],
+    llmMiddlewares: LLMMiddleware[],
+    streamOutput: boolean,
     signal?: AbortSignal,
   ): AsyncGenerator<RunStreamEvent, LLMOperationResult, void> {
-    const stream = await ctx.activeProvider.generateStream(
-      ctx.activeModel,
-      messages,
-      tools,
-      signal ? { signal } : {},
-    );
+    const internalAbort = new AbortController();
+    const options = { signal: combineAbortSignals(signal, internalAbort.signal) };
 
-    let content: string | null = null;
-    let toolCalls: ToolCall[] | undefined;
-    let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    if (llmMiddlewares.length === 0) {
+      try {
+        const stream = await ctx.activeProvider.generateStream(
+          ctx.activeModel,
+          messages,
+          tools,
+          options,
+        );
 
-    for await (const event of stream) {
-      switch (event.type) {
-        case 'text':
-          content = event.content;
-          yield { type: 'text_delta', delta: event.delta, content: event.content };
-          break;
-        case 'tool_calls':
-          toolCalls = event.toolCalls;
-          break;
-        case 'usage':
-          usage = event.usage;
-          break;
+        let content = '';
+        let toolCalls: ToolCall[] | undefined;
+        let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
+        for await (const event of stream) {
+          switch (event.type) {
+            case 'response_started':
+              break;
+            case 'text':
+              content += event.delta;
+              if (streamOutput) {
+                yield { type: 'text_delta', delta: event.delta, content: event.content };
+              }
+              break;
+            case 'tool_calls':
+              toolCalls = event.toolCalls;
+              break;
+            case 'usage':
+              usage = event.usage;
+              break;
+          }
+        }
+
+        return {
+          message: {
+            role: 'assistant',
+            content: content || null,
+            ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+          },
+          usage,
+        };
+      } finally {
+        internalAbort.abort();
       }
     }
 
-    return {
-      message: {
-        role: 'assistant',
-        content,
-        ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-      },
-      usage,
+    const middlewareContext: LLMMiddlewareContext = {
+      model: ctx.activeModel,
+      messages: [...messages],
+      tools: [...tools],
+      options,
+      agentContext: ctx,
+      streamOutput,
+      responseStarted: false,
     };
+
+    const queue = new EventQueue<RunStreamEvent>();
+    let result: LLMOperationResult | undefined;
+    let runnerError: unknown;
+
+    const runner = (async (): Promise<void> => {
+      try {
+        result = await chainMiddleware(llmMiddlewares, middlewareContext, async () => {
+          const stream = await middlewareContext.agentContext.activeProvider.generateStream(
+            middlewareContext.agentContext.activeModel,
+            middlewareContext.messages,
+            middlewareContext.tools,
+            middlewareContext.options,
+          );
+
+          let content = '';
+          let toolCalls: ToolCall[] | undefined;
+          let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
+          for await (const event of stream) {
+            switch (event.type) {
+              case 'response_started':
+                middlewareContext.responseStarted = true;
+                break;
+              case 'text':
+                middlewareContext.responseStarted = true;
+                content += event.delta;
+                if (middlewareContext.streamOutput) {
+                  queue.push({ type: 'text_delta', delta: event.delta, content: event.content });
+                }
+                break;
+              case 'tool_calls':
+                middlewareContext.responseStarted = true;
+                toolCalls = event.toolCalls;
+                break;
+              case 'usage':
+                usage = event.usage;
+                break;
+            }
+          }
+
+          return {
+            message: {
+              role: 'assistant',
+              content: content || null,
+              ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+            },
+            usage,
+          };
+        });
+      } catch (error) {
+        runnerError = error;
+      } finally {
+        queue.close();
+      }
+    })();
+
+    try {
+      for await (const event of queue) {
+        yield event;
+      }
+      await runner;
+      if (runnerError) {
+        throw toError(runnerError);
+      }
+      return result!;
+    } finally {
+      internalAbort.abort();
+      await runner.catch(() => {});
+    }
   }
 
-  private createResultBase(ctx: AgentContext): Pick<EngineResult, 'messages' | 'visibleMessages' | 'usage'> {
-    const messages = [...ctx.messages];
+  private createResultBase(ctx: AgentContext): Pick<EngineResult, 'messages' | 'usage'> {
     return {
-      messages,
-      visibleMessages: filterVisibleMessages(messages),
-      usage: ctx.sessionUsage,
+      messages: [...ctx.messages],
+      usage: { ...ctx.sessionUsage },
     };
   }
 
@@ -182,9 +327,10 @@ export class ExecutionLoop {
   }
 
   private getErrorSource(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-    if (error instanceof Error && error.name === 'TimeoutError') {return 'timeout';}
+    if (signal?.aborted && signal.reason instanceof Error && signal.reason.name === 'TimeoutError') {return 'timeout';}
     if (signal?.aborted && error === signal.reason) {return 'aborted';}
-    if (error instanceof Error && error.name === 'AbortError') {return 'aborted';}
+    if (error instanceof Error && error.name === 'TimeoutError') {return 'timeout';}
+    if (signal?.aborted && error instanceof Error && error.name === 'AbortError') {return 'aborted';}
     return undefined;
   }
 }

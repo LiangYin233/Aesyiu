@@ -11,6 +11,7 @@ export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
 class StreamParser {
   private content = '';
   private toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+  private refusalParts = new Map<string, string>();
   private usage: TokenUsage | undefined;
 
   consume(event: OpenAI.Responses.ResponseStreamEvent): StreamEvent | undefined {
@@ -18,6 +19,26 @@ class StreamParser {
       case 'response.output_text.delta':
         this.content += event.delta;
         return { type: 'text', delta: event.delta, content: this.content };
+      case 'response.refusal.delta': {
+        const key = `${event.output_index}:${event.content_index}`;
+        const next = (this.refusalParts.get(key) ?? '') + event.delta;
+        this.refusalParts.set(key, next);
+        this.content += event.delta;
+        return { type: 'text', delta: event.delta, content: this.content };
+      }
+      case 'response.refusal.done': {
+        const key = `${event.output_index}:${event.content_index}`;
+        const current = this.refusalParts.get(key) ?? '';
+        const missing = event.refusal.startsWith(current)
+          ? event.refusal.slice(current.length)
+          : event.refusal;
+        this.refusalParts.set(key, event.refusal);
+        if (!missing) {
+          return undefined;
+        }
+        this.content += missing;
+        return { type: 'text', delta: missing, content: this.content };
+      }
       case 'response.function_call_arguments.delta': {
         const current = this.toolCalls.get(event.output_index) ?? {
           id: event.item_id,
@@ -171,6 +192,8 @@ export class OpenAIResponsesProvider extends LLMProvider {
         for (const content of msgItem.content) {
           if (content.type === 'output_text') {
             textParts.push((content as OpenAI.Responses.ResponseOutputText).text);
+          } else if (content.type === 'refusal') {
+            textParts.push(content.refusal);
           }
         }
       } else if (item.type === 'function_call') {
@@ -241,8 +264,19 @@ export class OpenAIResponsesProvider extends LLMProvider {
     );
 
     const parser = new StreamParser();
+    let responseStarted = false;
 
     for await (const event of stream) {
+      const startsResponse = event.type === 'response.output_text.delta'
+        || event.type === 'response.refusal.delta'
+        || event.type === 'response.refusal.done'
+        || event.type === 'response.function_call_arguments.delta'
+        || event.type === 'response.function_call_arguments.done'
+        || (event.type === 'response.output_item.done' && event.item?.type === 'function_call');
+      if (!responseStarted && startsResponse) {
+        responseStarted = true;
+        yield { type: 'response_started' };
+      }
       const streamEvent = parser.consume(event);
       if (streamEvent) {yield streamEvent;}
     }

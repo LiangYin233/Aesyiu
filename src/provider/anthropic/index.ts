@@ -105,6 +105,15 @@ export class AnthropicProvider extends LLMProvider {
   private toSDKMessages(messages: Message[]): { system?: string | Anthropic.ContentBlockParam[]; messages: AnthropicMessageParam[] } {
     const systemMessages: string[] = [];
     const sdkMessages: AnthropicMessageParam[] = [];
+    let pendingToolResults: AnthropicToolResultBlockParam[] = [];
+
+    const flushPendingToolResults = (): void => {
+      if (pendingToolResults.length === 0) {
+        return;
+      }
+      sdkMessages.push({ role: 'user', content: pendingToolResults });
+      pendingToolResults = [];
+    };
 
     for (const msg of messages) {
       if (msg.role === 'system') {
@@ -113,16 +122,15 @@ export class AnthropicProvider extends LLMProvider {
       }
 
       if (msg.role === 'tool') {
-        const contentBlocks: AnthropicToolResultBlockParam[] = [
-          {
-            type: 'tool_result',
-            tool_use_id: requireToolCallId(msg),
-            content: msg.content ?? '',
-          },
-        ];
-        sdkMessages.push({ role: 'user', content: contentBlocks });
+        pendingToolResults.push({
+          type: 'tool_result',
+          tool_use_id: requireToolCallId(msg),
+          content: msg.content ?? '',
+        });
         continue;
       }
+
+      flushPendingToolResults();
 
       if (msg.role === 'assistant') {
         if (msg.tool_calls && msg.tool_calls.length > 0) {
@@ -153,6 +161,8 @@ export class AnthropicProvider extends LLMProvider {
         content: msg.content ?? '',
       });
     }
+
+    flushPendingToolResults();
 
     return {
       system: systemMessages.length > 0 ? systemMessages.join('\n') : undefined,
@@ -250,8 +260,13 @@ export class AnthropicProvider extends LLMProvider {
     );
 
     const parser = new StreamParser();
+    let responseStarted = false;
 
     for await (const event of stream) {
+      if (!responseStarted && event.type === 'content_block_start') {
+        responseStarted = true;
+        yield { type: 'response_started' };
+      }
       const streamEvent = parser.consume(event);
       if (streamEvent) {yield streamEvent;}
     }
