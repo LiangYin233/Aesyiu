@@ -1,7 +1,7 @@
-AGENTS.md
-.trellis/workspace/
+.trellis/
 .claude/
 .opencode/
+AGENTS.md
 
 # Build output
 dist
