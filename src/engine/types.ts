@@ -1,9 +1,14 @@
 import type { AgentContext } from '../context/index.js';
 import type { MemoryManager, MemoryManagerConfig } from '../memory/index.js';
 import type { GenerateOptions } from '../provider/index.js';
-import type { Message, ModelDefinition, Tool, ToolCall, TokenUsage } from '../types/index.js';
+import type { Message, ModelDefinition, Tool, ToolCall, TokenUsage, RunStreamEvent, EngineResult } from '../types/index.js';
 
-export type Middleware = (ctx: AgentContext, next: () => Promise<void>) => Promise<void>;
+export type LLMOperationResult = { message: Message; usage: TokenUsage };
+
+export type Middleware = (
+  ctx: AgentContext,
+  next: () => AsyncGenerator<RunStreamEvent, EngineResult, void>,
+) => AsyncGenerator<RunStreamEvent, EngineResult, void>;
 
 export interface LLMMiddlewareContext {
   readonly model: ModelDefinition;
@@ -17,8 +22,8 @@ export interface LLMMiddlewareContext {
 
 export type LLMMiddleware = (
   ctx: LLMMiddlewareContext,
-  next: () => Promise<{ message: Message; usage: TokenUsage }>,
-) => Promise<{ message: Message; usage: TokenUsage }>;
+  next: () => AsyncGenerator<RunStreamEvent, LLMOperationResult, void>,
+) => AsyncGenerator<RunStreamEvent, LLMOperationResult, void>;
 
 export interface ToolMiddlewareContext {
   readonly tool: Tool;
@@ -29,8 +34,8 @@ export interface ToolMiddlewareContext {
 
 export type ToolMiddleware = (
   ctx: ToolMiddlewareContext,
-  next: () => Promise<unknown>,
-) => Promise<unknown>;
+  next: () => AsyncGenerator<never, unknown, void>,
+) => AsyncGenerator<never, unknown, void>;
 
 export interface AesyiuEngineConfig {
   maxSteps?: number;

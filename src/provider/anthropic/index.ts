@@ -1,6 +1,6 @@
 import Anthropic, { type ClientOptions as AnthropicClientOptions } from '@anthropic-ai/sdk';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../../types/index.js';
-import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
+import { LLMProvider, requireToolCallId, type GenerateOptions, type StreamParserLike } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const ANTHROPIC_MODELS: ModelDefinition[] = [
@@ -28,7 +28,7 @@ function parseToolCallArguments(toolCall: { id: string; name: string; arguments:
   }
 }
 
-class StreamParser {
+class StreamParser implements StreamParserLike {
   private content = '';
   private toolCalls: { id: string; name: string; arguments: string }[] = [];
   private currentToolId = '';
@@ -36,22 +36,28 @@ class StreamParser {
   private currentToolInput = '';
   private usage: TokenUsage | undefined;
 
-  consume(event: Anthropic.Messages.MessageStreamEvent): StreamEvent | undefined {
-    switch (event.type) {
+  isResponseStarted(event: unknown): boolean {
+    const e = event as Anthropic.Messages.MessageStreamEvent;
+    return e.type === 'content_block_start';
+  }
+
+  parseEvent(event: unknown): StreamEvent | undefined {
+    const e = event as Anthropic.Messages.MessageStreamEvent;
+    switch (e.type) {
       case 'content_block_start':
-        if (event.content_block.type === 'tool_use') {
-          this.currentToolId = event.content_block.id;
-          this.currentToolName = event.content_block.name;
+        if (e.content_block.type === 'tool_use') {
+          this.currentToolId = e.content_block.id;
+          this.currentToolName = e.content_block.name;
           this.currentToolInput = '';
         }
         return undefined;
       case 'content_block_delta':
-        if (event.delta.type === 'text_delta') {
-          this.content += event.delta.text;
-          return { type: 'text', delta: event.delta.text, content: this.content };
+        if (e.delta.type === 'text_delta') {
+          this.content += e.delta.text;
+          return { type: 'text', delta: e.delta.text, content: this.content };
         }
-        if (event.delta.type === 'input_json_delta') {
-          this.currentToolInput += event.delta.partial_json;
+        if (e.delta.type === 'input_json_delta') {
+          this.currentToolInput += e.delta.partial_json;
         }
         return undefined;
       case 'content_block_stop':
@@ -67,11 +73,11 @@ class StreamParser {
         }
         return undefined;
       case 'message_delta':
-        if (event.usage) {
+        if (e.usage) {
           this.usage = {
-            promptTokens: event.usage.input_tokens ?? 0,
-            completionTokens: event.usage.output_tokens ?? 0,
-            totalTokens: (event.usage.input_tokens ?? 0) + (event.usage.output_tokens ?? 0),
+            promptTokens: e.usage.input_tokens ?? 0,
+            completionTokens: e.usage.output_tokens ?? 0,
+            totalTokens: (e.usage.input_tokens ?? 0) + (e.usage.output_tokens ?? 0),
           };
         }
         return undefined;
@@ -178,11 +184,44 @@ export class AnthropicProvider extends LLMProvider {
     })) : undefined;
   }
 
-  private fromSDKResponse(response: Anthropic.Message): { message: Message; usage: TokenUsage } {
+  protected createRequest(model: ModelDefinition, messages: Message[], tools?: Tool[]): Record<string, unknown> {
+    const { system, messages: sdkMessages } = this.toSDKMessages(messages);
+    const params: Record<string, unknown> = {
+      model: model.id,
+      max_tokens: model.maxOutputTokens,
+      messages: sdkMessages,
+    };
+    if (system) {
+      params.system = system;
+    }
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    return params;
+  }
+
+  protected async sendRequest(request: Record<string, unknown>, options?: GenerateOptions): Promise<unknown> {
+    return this.client.messages.create(
+      request as unknown as Anthropic.MessageCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  }
+
+  protected async sendStream(request: Record<string, unknown>, options?: GenerateOptions): Promise<AsyncIterable<unknown>> {
+    const stream = this.client.messages.stream(
+      request as unknown as Anthropic.MessageCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    return stream as AsyncIterable<unknown>;
+  }
+
+  protected parseResponse(response: unknown): { message: Message; usage: TokenUsage } {
+    const resp = response as Anthropic.Message;
     const textContents: string[] = [];
     const toolCalls: { id: string; name: string; arguments: string }[] = [];
 
-    for (const block of response.content) {
+    for (const block of resp.content) {
       if (block.type === 'text') {
         textContents.push(block.text);
       } else if (block.type === 'tool_use') {
@@ -196,84 +235,15 @@ export class AnthropicProvider extends LLMProvider {
     }
 
     const usage: TokenUsage = {
-      promptTokens: response.usage.input_tokens,
-      completionTokens: response.usage.output_tokens,
-      totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+      promptTokens: resp.usage.input_tokens,
+      completionTokens: resp.usage.output_tokens,
+      totalTokens: resp.usage.input_tokens + resp.usage.output_tokens,
     };
 
     return { message: this.buildAssistantMessage(textContents.join(''), toolCalls), usage };
   }
 
-  public async generate(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): Promise<{ message: Message; usage: TokenUsage }> {
-    const modelDef = this.resolveModel(model);
-    const { system, messages: sdkMessages } = this.toSDKMessages(messages);
-    const params: Record<string, unknown> = {
-      model: modelDef.id,
-      max_tokens: modelDef.maxOutputTokens,
-      messages: sdkMessages,
-    };
-    if (system) {
-      params.system = system;
-    }
-    const sdkTools = this.toSDKTools(tools);
-    if (sdkTools) {
-      params.tools = sdkTools;
-    }
-    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
-    const response = await this.client.messages.create(
-      merged as unknown as Anthropic.MessageCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-    return this.fromSDKResponse(response);
-  }
-
-  public async *generateStream(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): AsyncGenerator<StreamEvent, void> {
-    const modelDef = this.resolveModel(model);
-    const { system, messages: sdkMessages } = this.toSDKMessages(messages);
-    const params: Record<string, unknown> = {
-      model: modelDef.id,
-      max_tokens: modelDef.maxOutputTokens,
-      messages: sdkMessages,
-    };
-    if (system) {
-      params.system = system;
-    }
-    const sdkTools = this.toSDKTools(tools);
-    if (sdkTools) {
-      params.tools = sdkTools;
-    }
-    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
-
-    const stream = this.client.messages.stream(
-      merged as unknown as Anthropic.MessageCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-
-    const parser = new StreamParser();
-    let responseStarted = false;
-
-    for await (const event of stream) {
-      if (!responseStarted && event.type === 'content_block_start') {
-        responseStarted = true;
-        yield { type: 'response_started' };
-      }
-      const streamEvent = parser.consume(event);
-      if (streamEvent) {yield streamEvent;}
-    }
-
-    const toolCalls = parser.getToolCalls();
-    if (toolCalls) {yield { type: 'tool_calls', toolCalls };}
-    const usage = parser.getUsage();
-    if (usage) {yield { type: 'usage', usage };}
+  protected createStreamParser(): StreamParserLike {
+    return new StreamParser();
   }
 }

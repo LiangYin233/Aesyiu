@@ -7,8 +7,7 @@ import { createLoadSkillTool, type AgentSkill } from '../skill/index.js';
 import type { AesyiuEngineConfig, LLMMiddleware, Middleware, RunOptions, ToolMiddleware } from './types.js';
 import { ExecutionLoop } from './execution-loop.js';
 import { prepareRun } from './preparation.js';
-import { runStreamWithMiddleware } from './stream.js';
-import { consumeGenerator, runUserMiddleware } from './utils.js';
+import { chainMiddleware, consumeGenerator } from './utils.js';
 import { ToolRegistry } from '../tool/registry.js';
 
 export type {
@@ -142,19 +141,28 @@ export class AesyiuEngine {
     });
   }
 
-  public async run(input: Message, ctx: AgentContext, options?: RunOptions): Promise<EngineResult> {
+  private createRunGenerator(
+    input: Message,
+    ctx: AgentContext,
+    options: RunOptions | undefined,
+    streamOutput: boolean,
+  ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
     const { availableTools, signal } = this.prepareExecution(input, ctx, options);
     const loop = this.createLoop();
-    return runUserMiddleware(
+    return chainMiddleware(
       this.middlewares,
       ctx,
-      () => consumeGenerator(loop.run(ctx, availableTools, {
+      () => loop.run(ctx, availableTools, {
         signal,
-        streamOutput: false,
+        streamOutput,
         llmMiddlewares: this.llmMiddlewares,
         toolMiddlewares: this.toolMiddlewares,
-      })),
+      }),
     );
+  }
+
+  public async run(input: Message, ctx: AgentContext, options?: RunOptions): Promise<EngineResult> {
+    return consumeGenerator(this.createRunGenerator(input, ctx, options, false));
   }
 
   public async *runStream(
@@ -162,18 +170,6 @@ export class AesyiuEngine {
     ctx: AgentContext,
     options?: RunOptions,
   ): AsyncGenerator<RunStreamEvent, EngineResult, void> {
-    const { availableTools, signal } = this.prepareExecution(input, ctx, options);
-    const loop = this.createLoop();
-    return yield* runStreamWithMiddleware(
-      ctx,
-      this.middlewares,
-      signal,
-      (mctx, msignal) => loop.run(mctx, availableTools, {
-        signal: msignal,
-        streamOutput: true,
-        llmMiddlewares: this.llmMiddlewares,
-        toolMiddlewares: this.toolMiddlewares,
-      }),
-    );
+    return yield* this.createRunGenerator(input, ctx, options, true);
   }
 }

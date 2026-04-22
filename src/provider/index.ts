@@ -1,4 +1,4 @@
-import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../types/index.js';
+import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent, ToolCall } from '../types/index.js';
 import { AesyiuProgrammingError } from '../error/index.js';
 
 export interface GenerateOptions {
@@ -10,6 +10,13 @@ export function requireToolCallId(message: Message): string {
     throw new AesyiuProgrammingError('Tool message is missing tool_call_id');
   }
   return message.tool_call_id;
+}
+
+export interface StreamParserLike {
+  isResponseStarted(event: unknown): boolean;
+  parseEvent(event: unknown): StreamEvent | undefined;
+  getToolCalls(): ToolCall[] | undefined;
+  getUsage(): TokenUsage | undefined;
 }
 
 export abstract class LLMProvider {
@@ -51,17 +58,48 @@ export abstract class LLMProvider {
     };
   }
 
-  public abstract generate(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): Promise<{ message: Message; usage: TokenUsage }>;
+  protected abstract createRequest(model: ModelDefinition, messages: Message[], tools?: Tool[], stream?: boolean): Record<string, unknown>;
+  protected abstract sendRequest(request: Record<string, unknown>, options?: GenerateOptions): Promise<unknown>;
+  protected abstract sendStream(request: Record<string, unknown>, options?: GenerateOptions): Promise<AsyncIterable<unknown>> | AsyncIterable<unknown>;
+  protected abstract parseResponse(response: unknown): { message: Message; usage: TokenUsage };
+  protected abstract createStreamParser(): StreamParserLike;
 
-  public abstract generateStream(
+  public async generate(
     model: ModelDefinition | string,
     messages: Message[],
     tools?: Tool[],
     options?: GenerateOptions,
-  ): AsyncGenerator<StreamEvent, void>;
+  ): Promise<{ message: Message; usage: TokenUsage }> {
+    const modelDef = this.resolveModel(model);
+    const request = this.createRequest(modelDef, messages, tools, false);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...request } : request;
+    const response = await this.sendRequest(merged, options);
+    return this.parseResponse(response);
+  }
+
+  public async *generateStream(
+    model: ModelDefinition | string,
+    messages: Message[],
+    tools?: Tool[],
+    options?: GenerateOptions,
+  ): AsyncGenerator<StreamEvent, void> {
+    const modelDef = this.resolveModel(model);
+    const request = this.createRequest(modelDef, messages, tools, true);
+    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...request } : request;
+    const stream = await this.sendStream(merged, options);
+    const parser = this.createStreamParser();
+    let responseStarted = false;
+    for await (const event of stream) {
+      if (!responseStarted && parser.isResponseStarted(event)) {
+        responseStarted = true;
+        yield { type: 'response_started' };
+      }
+      const streamEvent = parser.parseEvent(event);
+      if (streamEvent) { yield streamEvent; }
+    }
+    const toolCalls = parser.getToolCalls();
+    if (toolCalls) { yield { type: 'tool_calls', toolCalls }; }
+    const usage = parser.getUsage();
+    if (usage) { yield { type: 'usage', usage }; }
+  }
 }

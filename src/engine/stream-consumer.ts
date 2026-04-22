@@ -3,8 +3,8 @@ import type { Message, RunStreamEvent, StreamEvent, TokenUsage, ToolCall } from 
 type LLMOperationResult = { message: Message; usage: TokenUsage };
 
 /**
- * Core generator that consumes a provider stream and yields text_delta events.
- * Both middleware and non-middleware paths share this logic.
+ * Consumes a provider stream and yields text_delta events.
+ * Returns the final assistant message and token usage.
  */
 export async function* consumeLLMStreamGen(
   stream: AsyncIterable<StreamEvent>,
@@ -43,25 +43,4 @@ export async function* consumeLLMStreamGen(
     },
     usage,
   };
-}
-
-/**
- * Adapter that drives consumeLLMStreamGen and forwards each yielded event
- * to an onEvent callback, returning the final result as a Promise.
- * Used by the middleware path where events must be bridged through a queue.
- */
-export async function consumeLLMStream(
-  stream: AsyncIterable<StreamEvent>,
-  streamOutput: boolean,
-  onEvent: (event: RunStreamEvent) => void,
-  onResponseStarted?: () => void,
-): Promise<LLMOperationResult> {
-  const gen = consumeLLMStreamGen(stream, streamOutput, onResponseStarted);
-  while (true) {
-    const next = await gen.next();
-    if (next.done) {
-      return next.value;
-    }
-    onEvent(next.value);
-  }
 }

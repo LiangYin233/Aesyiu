@@ -5,15 +5,14 @@ import type {
   EngineResult,
   Message,
   RunStreamEvent,
-  TokenUsage,
   Tool,
+  TokenUsage,
 } from '../types/index.js';
 import type { LLMMiddleware, LLMMiddlewareContext, ToolMiddleware } from './types.js';
-import { EventQueue } from './event-queue.js';
 import { prepareOutboundMessages } from './preparation.js';
 import { runToolCalls } from '../tool/runner.js';
-import { consumeLLMStream, consumeLLMStreamGen } from './stream-consumer.js';
-import { chainMiddleware, combineAbortSignals, getErrorMessage, rethrowProgrammingError, toError } from './utils.js';
+import { consumeLLMStreamGen } from './stream-consumer.js';
+import { chainMiddleware, classifyError, combineAbortSignals, getErrorMessage, rethrowProgrammingError } from './utils.js';
 
 type LLMOperationResult = { message: Message; usage: TokenUsage };
 
@@ -137,20 +136,6 @@ export class ExecutionLoop {
     const internalAbort = new AbortController();
     const options = { signal: combineAbortSignals(signal, internalAbort.signal) };
 
-    if (llmMiddlewares.length === 0) {
-      try {
-        const stream = await ctx.activeProvider.generateStream(
-          ctx.activeModel,
-          messages,
-          tools,
-          options,
-        );
-        return yield* consumeLLMStreamGen(stream, streamOutput);
-      } finally {
-        internalAbort.abort();
-      }
-    }
-
     const middlewareContext: LLMMiddlewareContext = {
       model: ctx.activeModel,
       messages: [...messages],
@@ -161,45 +146,20 @@ export class ExecutionLoop {
       responseStarted: false,
     };
 
-    const queue = new EventQueue<RunStreamEvent>();
-    let result: LLMOperationResult | undefined;
-    let runnerError: unknown;
-
-    const runner = (async (): Promise<void> => {
-      try {
-        result = await chainMiddleware(llmMiddlewares, middlewareContext, async () => {
-          const stream = await middlewareContext.agentContext.activeProvider.generateStream(
-            middlewareContext.agentContext.activeModel,
-            middlewareContext.messages,
-            middlewareContext.tools,
-            middlewareContext.options,
-          );
-          return consumeLLMStream(
-            stream,
-            middlewareContext.streamOutput,
-            (event) => { queue.push(event); },
-            () => { middlewareContext.responseStarted = true; },
-          );
-        });
-      } catch (error) {
-        runnerError = error;
-      } finally {
-        queue.close();
-      }
-    })();
-
     try {
-      for await (const event of queue) {
-        yield event;
-      }
-      await runner;
-      if (runnerError) {
-        throw toError(runnerError);
-      }
-      return result!;
+      return yield* chainMiddleware(llmMiddlewares, middlewareContext, async function* llmCore() {
+        const stream = await ctx.activeProvider.generateStream(
+          ctx.activeModel,
+          messages,
+          tools,
+          options,
+        );
+        return yield* consumeLLMStreamGen(stream, streamOutput, () => {
+          middlewareContext.responseStarted = true;
+        });
+      });
     } finally {
       internalAbort.abort();
-      await runner.catch(() => {});
     }
   }
 
@@ -224,14 +184,6 @@ export class ExecutionLoop {
 
   private handleStepError(ctx: AgentContext, error: unknown, signal: AbortSignal | undefined, fallbackSource: EngineErrorSource): EngineResult {
     rethrowProgrammingError(error);
-    return this.createErrorResult(ctx, error, this.getErrorSource(error, signal) ?? fallbackSource);
-  }
-
-  private getErrorSource(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-    if (signal?.aborted && signal.reason instanceof Error && signal.reason.name === 'TimeoutError') {return 'timeout';}
-    if (signal?.aborted && error === signal.reason) {return 'aborted';}
-    if (error instanceof Error && error.name === 'TimeoutError') {return 'timeout';}
-    if (signal?.aborted && error instanceof Error && error.name === 'AbortError') {return 'aborted';}
-    return undefined;
+    return this.createErrorResult(ctx, error, classifyError(error, signal) ?? fallbackSource);
   }
 }

@@ -15,11 +15,11 @@ export function loggingMiddleware(options?: LoggingMiddlewareOptions): LLMMiddle
   const log = options?.log ?? ((event) => console.log('[aesyiu:llm]', event));
   const label = options?.label ?? 'llm';
 
-  return async function loggingLLMMiddleware(ctx, next) {
+  return async function* loggingLLMMiddleware(ctx, next) {
     const start = Date.now();
     log({ phase: 'request', label, model: ctx.model.id, messageCount: ctx.messages.length, toolCount: ctx.tools.length });
     try {
-      const result = await next();
+      const result = yield* next();
       log({
         phase: 'response',
         label,
@@ -78,17 +78,18 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
   const backoffFactor = options?.backoffFactor ?? 2;
   const shouldRetry = options?.shouldRetry ?? defaultShouldRetry;
 
-  return async function retryLLMMiddleware(ctx, next) {
+  return async function* retryLLMMiddleware(ctx, next) {
+    if (ctx.streamOutput) {
+      return yield* next();
+    }
+
     let attempt = 0;
     let delay = initialDelayMs;
 
     while (true) {
       try {
-        return await next();
+        return yield* next();
       } catch (error) {
-        if (ctx.streamOutput && ctx.responseStarted) {
-          throw error;
-        }
         if (attempt >= maxRetries || !shouldRetry(error, attempt)) {
           throw error;
         }
@@ -108,7 +109,7 @@ export interface TimeoutMiddlewareOptions {
 }
 
 export function timeoutMiddleware(options: TimeoutMiddlewareOptions): LLMMiddleware {
-  return async function timeoutLLMMiddleware(ctx, next) {
+  return async function* timeoutLLMMiddleware(ctx, next) {
     const timeoutSignal = AbortSignal.timeout(options.ms);
     const previousSignal = ctx.options.signal;
     ctx.options = {
@@ -117,7 +118,7 @@ export function timeoutMiddleware(options: TimeoutMiddlewareOptions): LLMMiddlew
     };
 
     try {
-      return await next();
+      return yield* next();
     } catch (error) {
       if (timeoutSignal.aborted && !previousSignal?.aborted) {
         throw timeoutSignal.reason ?? error;

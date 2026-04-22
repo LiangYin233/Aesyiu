@@ -1,6 +1,6 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../../types/index.js';
-import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
+import { LLMProvider, requireToolCallId, type GenerateOptions, type StreamParserLike } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
@@ -8,31 +8,42 @@ export const OPENAI_RESPONSES_MODELS: ModelDefinition[] = [
   { id: 'gpt-4o-mini', contextWindow: 128000, maxOutputTokens: 16384 },
 ];
 
-class StreamParser {
+class StreamParser implements StreamParserLike {
   private content = '';
   private toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
   private refusalParts = new Map<string, string>();
   private usage: TokenUsage | undefined;
 
-  consume(event: OpenAI.Responses.ResponseStreamEvent): StreamEvent | undefined {
-    switch (event.type) {
+  isResponseStarted(event: unknown): boolean {
+    const e = event as OpenAI.Responses.ResponseStreamEvent;
+    return e.type === 'response.output_text.delta'
+      || e.type === 'response.refusal.delta'
+      || e.type === 'response.refusal.done'
+      || e.type === 'response.function_call_arguments.delta'
+      || e.type === 'response.function_call_arguments.done'
+      || (e.type === 'response.output_item.done' && (e as { item?: { type?: string } }).item?.type === 'function_call');
+  }
+
+  parseEvent(event: unknown): StreamEvent | undefined {
+    const e = event as OpenAI.Responses.ResponseStreamEvent;
+    switch (e.type) {
       case 'response.output_text.delta':
-        this.content += event.delta;
-        return { type: 'text', delta: event.delta, content: this.content };
+        this.content += e.delta;
+        return { type: 'text', delta: e.delta, content: this.content };
       case 'response.refusal.delta': {
-        const key = `${event.output_index}:${event.content_index}`;
-        const next = (this.refusalParts.get(key) ?? '') + event.delta;
+        const key = `${e.output_index}:${e.content_index}`;
+        const next = (this.refusalParts.get(key) ?? '') + e.delta;
         this.refusalParts.set(key, next);
-        this.content += event.delta;
-        return { type: 'text', delta: event.delta, content: this.content };
+        this.content += e.delta;
+        return { type: 'text', delta: e.delta, content: this.content };
       }
       case 'response.refusal.done': {
-        const key = `${event.output_index}:${event.content_index}`;
+        const key = `${e.output_index}:${e.content_index}`;
         const current = this.refusalParts.get(key) ?? '';
-        const missing = event.refusal.startsWith(current)
-          ? event.refusal.slice(current.length)
-          : event.refusal;
-        this.refusalParts.set(key, event.refusal);
+        const missing = e.refusal.startsWith(current)
+          ? e.refusal.slice(current.length)
+          : e.refusal;
+        this.refusalParts.set(key, e.refusal);
         if (!missing) {
           return undefined;
         }
@@ -40,31 +51,31 @@ class StreamParser {
         return { type: 'text', delta: missing, content: this.content };
       }
       case 'response.function_call_arguments.delta': {
-        const current = this.toolCalls.get(event.output_index) ?? {
-          id: event.item_id,
+        const current = this.toolCalls.get(e.output_index) ?? {
+          id: e.item_id,
           name: '',
           arguments: '',
         };
-        current.arguments += event.delta;
-        this.toolCalls.set(event.output_index, current);
+        current.arguments += e.delta;
+        this.toolCalls.set(e.output_index, current);
         return undefined;
       }
       case 'response.function_call_arguments.done': {
-        const current = this.toolCalls.get(event.output_index) ?? {
-          id: event.item_id,
-          name: event.name,
+        const current = this.toolCalls.get(e.output_index) ?? {
+          id: e.item_id,
+          name: e.name,
           arguments: '',
         };
-        current.id = event.item_id;
-        current.name = event.name;
-        current.arguments = event.arguments;
-        this.toolCalls.set(event.output_index, current);
+        current.id = e.item_id;
+        current.name = e.name;
+        current.arguments = e.arguments;
+        this.toolCalls.set(e.output_index, current);
         return undefined;
       }
       case 'response.output_item.done': {
-        const item = event.item;
+        const item = (e as { item?: { type?: string; call_id?: string; name?: string; arguments?: string } }).item;
         if (item?.type === 'function_call') {
-          const current = this.toolCalls.get(event.output_index) ?? {
+          const current = this.toolCalls.get(e.output_index) ?? {
             id: item.call_id ?? '',
             name: item.name ?? '',
             arguments: '',
@@ -72,12 +83,12 @@ class StreamParser {
           current.id = item.call_id ?? current.id;
           current.name = item.name ?? current.name;
           current.arguments ||= item.arguments ?? '';
-          this.toolCalls.set(event.output_index, current);
+          this.toolCalls.set(e.output_index, current);
         }
         return undefined;
       }
       case 'response.completed': {
-        const resp = event.response;
+        const resp = (e as { response?: { usage?: { input_tokens?: number; output_tokens?: number } } }).response;
         if (resp?.usage) {
           this.usage = {
             promptTokens: resp.usage.input_tokens ?? 0,
@@ -182,11 +193,42 @@ export class OpenAIResponsesProvider extends LLMProvider {
     })) : undefined;
   }
 
-  private fromSDKResponse(response: OpenAI.Responses.Response): { message: Message; usage: TokenUsage } {
+  protected createRequest(model: ModelDefinition, messages: Message[], tools?: Tool[], stream?: boolean): Record<string, unknown> {
+    const params: Record<string, unknown> = {
+      model: model.id,
+      input: this.toSDKInput(messages),
+    };
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    if (stream) {
+      params.stream = true;
+    }
+    return params;
+  }
+
+  protected async sendRequest(request: Record<string, unknown>, options?: GenerateOptions): Promise<unknown> {
+    return this.client.responses.create(
+      request as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  }
+
+  protected async sendStream(request: Record<string, unknown>, options?: GenerateOptions): Promise<AsyncIterable<unknown>> {
+    const stream = await this.client.responses.create(
+      request as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    return stream as AsyncIterable<unknown>;
+  }
+
+  protected parseResponse(response: unknown): { message: Message; usage: TokenUsage } {
+    const resp = response as OpenAI.Responses.Response;
     const textParts: string[] = [];
     const toolCalls: { id: string; name: string; arguments: string }[] = [];
 
-    for (const item of response.output) {
+    for (const item of resp.output) {
       if (item.type === 'message') {
         const msgItem = item as OpenAI.Responses.ResponseOutputMessage;
         for (const content of msgItem.content) {
@@ -207,83 +249,15 @@ export class OpenAIResponsesProvider extends LLMProvider {
     }
 
     const usage: TokenUsage = {
-      promptTokens: response.usage?.input_tokens ?? 0,
-      completionTokens: response.usage?.output_tokens ?? 0,
-      totalTokens: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+      promptTokens: resp.usage?.input_tokens ?? 0,
+      completionTokens: resp.usage?.output_tokens ?? 0,
+      totalTokens: (resp.usage?.input_tokens ?? 0) + (resp.usage?.output_tokens ?? 0),
     };
 
     return { message: this.buildAssistantMessage(textParts.join(''), toolCalls), usage };
   }
 
-  public async generate(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): Promise<{ message: Message; usage: TokenUsage }> {
-    const modelDef = this.resolveModel(model);
-    const input = this.toSDKInput(messages);
-    const params: Record<string, unknown> = {
-      model: modelDef.id,
-      input,
-    };
-    const sdkTools = this.toSDKTools(tools);
-    if (sdkTools) {
-      params.tools = sdkTools;
-    }
-    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
-    const response = await this.client.responses.create(
-      merged as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-    return this.fromSDKResponse(response);
-  }
-
-  public async *generateStream(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): AsyncGenerator<StreamEvent, void> {
-    const modelDef = this.resolveModel(model);
-    const input = this.toSDKInput(messages);
-    const params: Record<string, unknown> = {
-      model: modelDef.id,
-      input,
-      stream: true,
-    };
-    const sdkTools = this.toSDKTools(tools);
-    if (sdkTools) {
-      params.tools = sdkTools;
-    }
-    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
-
-    const stream = await this.client.responses.create(
-      merged as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-
-    const parser = new StreamParser();
-    let responseStarted = false;
-
-    for await (const event of stream) {
-      const startsResponse = event.type === 'response.output_text.delta'
-        || event.type === 'response.refusal.delta'
-        || event.type === 'response.refusal.done'
-        || event.type === 'response.function_call_arguments.delta'
-        || event.type === 'response.function_call_arguments.done'
-        || (event.type === 'response.output_item.done' && event.item?.type === 'function_call');
-      if (!responseStarted && startsResponse) {
-        responseStarted = true;
-        yield { type: 'response_started' };
-      }
-      const streamEvent = parser.consume(event);
-      if (streamEvent) {yield streamEvent;}
-    }
-
-    const toolCalls = parser.getToolCalls();
-    if (toolCalls) {yield { type: 'tool_calls', toolCalls };}
-    const usage = parser.getUsage();
-    if (usage) {yield { type: 'usage', usage };}
+  protected createStreamParser(): StreamParserLike {
+    return new StreamParser();
   }
 }

@@ -1,10 +1,8 @@
-import type { AgentContext } from '../context/index.js';
 import { AesyiuProgrammingError, isProgrammingError } from '../error/index.js';
-import type { EngineResult } from '../types/index.js';
-import type { Middleware } from './types.js';
+import type { EngineErrorSource, EngineResult, RunStreamEvent } from '../types/index.js';
 
 export function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {return error.message;}
+  if (error instanceof Error) { return error.message; }
   return String(error);
 }
 
@@ -18,55 +16,48 @@ export function rethrowProgrammingError(error: unknown): void {
   }
 }
 
+export function classifyError(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
+  if (signal?.aborted) {
+    if (signal.reason instanceof Error && signal.reason.name === 'TimeoutError') { return 'timeout'; }
+    if (error === signal.reason) { return 'aborted'; }
+    if (error instanceof Error && error.name === 'AbortError') { return 'aborted'; }
+  }
+  if (error instanceof Error && error.name === 'TimeoutError') { return 'timeout'; }
+  return undefined;
+}
+
 export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted && error === signal.reason) {
-    return true;
-  }
-  if (signal?.aborted && error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
-    return true;
-  }
-  return false;
+  return classifyError(error, signal) === 'aborted';
 }
 
 export function combineAbortSignals(signal: AbortSignal | undefined, fallback: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, fallback]) : fallback;
 }
 
-export async function chainMiddleware<TCtx, TResult>(
-  middlewares: ReadonlyArray<(ctx: TCtx, next: () => Promise<TResult>) => Promise<TResult>>,
+export async function* chainMiddleware<TCtx, TEvent, TResult>(
+  middlewares: ReadonlyArray<(ctx: TCtx, next: () => AsyncGenerator<TEvent, TResult, void>) => AsyncGenerator<TEvent, TResult, void>>,
   ctx: TCtx,
-  core: () => Promise<TResult>,
-): Promise<TResult> {
-  let next = core;
-  for (let i = middlewares.length - 1; i >= 0; i--) {
-    const middleware = middlewares[i];
-    const currentNext = next;
-    next = () => middleware(ctx, currentNext);
+  core: () => AsyncGenerator<TEvent, TResult, void>,
+): AsyncGenerator<TEvent, TResult, void> {
+  async function* run(index: number): AsyncGenerator<TEvent, TResult, void> {
+    if (index >= middlewares.length) {
+      return yield* core();
+    }
+    return yield* middlewares[index](ctx, () => run(index + 1));
   }
-  return next();
+  return yield* run(0);
 }
 
-export function runUserMiddleware(
-  middlewares: ReadonlyArray<Middleware>,
-  ctx: AgentContext,
-  core: () => Promise<EngineResult>,
-): Promise<EngineResult> {
-  const wrapped = middlewares.map((mw): ((c: AgentContext, n: () => Promise<EngineResult>) => Promise<EngineResult>) => {
-    return async (mctx, next) => {
-      let result: EngineResult | undefined;
-      await mw(mctx, async () => { result = await next(); });
-      if (result === undefined) {
-        throw new AesyiuProgrammingError('user middleware did not call next()');
-      }
-      return result;
-    };
-  });
-  return chainMiddleware(wrapped, ctx, core);
-}
-
-export async function consumeGenerator<TResult>(gen: AsyncGenerator<unknown, TResult, void>): Promise<TResult> {
+export async function consumeGenerator(gen: AsyncGenerator<unknown, EngineResult, void>): Promise<EngineResult> {
   while (true) {
     const next = await gen.next();
-    if (next.done) {return next.value;}
+    if (next.done) { return next.value; }
+  }
+}
+
+export async function consumeToolGenerator(gen: AsyncGenerator<never, unknown, void>): Promise<unknown> {
+  while (true) {
+    const next = await gen.next();
+    if (next.done) { return next.value; }
   }
 }

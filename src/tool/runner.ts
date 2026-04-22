@@ -4,9 +4,10 @@ import type { Message, Tool, ToolCall } from '../types/index.js';
 import type { ToolMiddleware } from '../engine/types.js';
 import {
   chainMiddleware,
+  classifyError,
   combineAbortSignals,
+  consumeToolGenerator,
   getErrorMessage,
-  isAbortError,
   rethrowProgrammingError,
 } from '../engine/utils.js';
 
@@ -34,7 +35,7 @@ export async function runToolCalls(
   try {
     return await Promise.all(promises);
   } catch (error) {
-    const isExternalAbort = isAbortError(error, signal);
+    const isExternalAbort = classifyError(error, signal) === 'aborted';
     toolAbort.abort();
     await Promise.allSettled(promises);
     rethrowProgrammingError(error);
@@ -77,10 +78,14 @@ async function runToolCall(
   };
 
   try {
-    const result = await chainMiddleware(
-      toolMiddlewares,
-      middlewareContext,
-      () => tool.execute(middlewareContext.args, ctx, { signal }),
+    const result = await consumeToolGenerator(
+      chainMiddleware(
+        toolMiddlewares,
+        middlewareContext,
+        async function* toolCore() {
+          return await tool.execute(middlewareContext.args, ctx, { signal });
+        },
+      ),
     );
 
     return {
@@ -89,7 +94,7 @@ async function runToolCall(
       tool_call_id: call.id,
     };
   } catch (error) {
-    if (isAbortError(error, signal)) {
+    if (classifyError(error, signal) === 'aborted') {
       throw error;
     }
     return toolFailureMessage(call, getErrorMessage(error));

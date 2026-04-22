@@ -1,7 +1,6 @@
 import OpenAI, { type ClientOptions as OpenAIClientOptions } from 'openai';
-import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions';
 import type { Message, ModelDefinition, ProviderConfig, Tool, TokenUsage, StreamEvent } from '../../types/index.js';
-import { LLMProvider, requireToolCallId, type GenerateOptions } from '../index.js';
+import { LLMProvider, requireToolCallId, type GenerateOptions, type StreamParserLike } from '../index.js';
 import { toProviderToolParameters } from '../../tool/schema.js';
 
 export const OPENAI_COMPLETION_MODELS: ModelDefinition[] = [
@@ -10,12 +9,22 @@ export const OPENAI_COMPLETION_MODELS: ModelDefinition[] = [
   { id: 'gpt-4-turbo', contextWindow: 128000, maxOutputTokens: 4096 },
 ];
 
-class StreamParser {
+class StreamParser implements StreamParserLike {
   private content = '';
   private toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
   private usage: TokenUsage | undefined;
 
-  consume(delta: OpenAI.ChatCompletionChunk.Choice.Delta): StreamEvent | undefined {
+  isResponseStarted(event: unknown): boolean {
+    const chunk = event as OpenAI.ChatCompletionChunk;
+    return Boolean(chunk.choices[0]?.delta?.content) || Boolean(chunk.choices[0]?.delta?.tool_calls?.length);
+  }
+
+  parseEvent(event: unknown): StreamEvent | undefined {
+    const chunk = event as OpenAI.ChatCompletionChunk;
+    this.setUsage(chunk.usage ?? undefined);
+    const delta = chunk.choices[0]?.delta;
+    if (!delta) {return undefined;}
+
     if (delta.content) {
       this.content += delta.content;
       return { type: 'text', delta: delta.content, content: this.content };
@@ -41,7 +50,7 @@ class StreamParser {
     return undefined;
   }
 
-  setUsage(usage: OpenAI.CompletionUsage | undefined): void {
+  private setUsage(usage: OpenAI.CompletionUsage | undefined): void {
     if (usage) {
       this.usage = {
         promptTokens: usage.prompt_tokens ?? 0,
@@ -76,8 +85,8 @@ export class OpenAICompletionProvider extends LLMProvider {
     this.client = new OpenAI(clientConfig);
   }
 
-  private toSDKMessages(messages: Message[]): ChatCompletionMessageParam[] {
-    const sdkMessages: ChatCompletionMessageParam[] = [];
+  private toSDKMessages(messages: Message[]): OpenAI.ChatCompletionMessageParam[] {
+    const sdkMessages: OpenAI.ChatCompletionMessageParam[] = [];
 
     for (const msg of messages) {
       if (msg.role === 'tool') {
@@ -121,7 +130,7 @@ export class OpenAICompletionProvider extends LLMProvider {
     return sdkMessages;
   }
 
-  private toSDKTools(tools?: Tool[]): ChatCompletionTool[] | undefined {
+  private toSDKTools(tools?: Tool[]): OpenAI.ChatCompletionTool[] | undefined {
     return tools?.length ? tools.map((tool) => ({
       type: 'function' as const,
       function: {
@@ -132,8 +141,40 @@ export class OpenAICompletionProvider extends LLMProvider {
     })) : undefined;
   }
 
-  private fromSDKResponse(response: OpenAI.ChatCompletion): { message: Message; usage: TokenUsage } {
-    const choice = response.choices[0];
+  protected createRequest(model: ModelDefinition, messages: Message[], tools?: Tool[], stream?: boolean): Record<string, unknown> {
+    const params: Record<string, unknown> = {
+      model: model.id,
+      messages: this.toSDKMessages(messages),
+    };
+    const sdkTools = this.toSDKTools(tools);
+    if (sdkTools) {
+      params.tools = sdkTools;
+    }
+    if (stream) {
+      params.stream = true;
+      params.stream_options = { include_usage: true };
+    }
+    return params;
+  }
+
+  protected async sendRequest(request: Record<string, unknown>, options?: GenerateOptions): Promise<unknown> {
+    return this.client.chat.completions.create(
+      request as unknown as OpenAI.ChatCompletionCreateParamsNonStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  }
+
+  protected async sendStream(request: Record<string, unknown>, options?: GenerateOptions): Promise<AsyncIterable<unknown>> {
+    const stream = await this.client.chat.completions.create(
+      request as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    return stream as AsyncIterable<unknown>;
+  }
+
+  protected parseResponse(response: unknown): { message: Message; usage: TokenUsage } {
+    const resp = response as OpenAI.ChatCompletion;
+    const choice = resp.choices[0];
     const msg = choice?.message;
 
     const toolCalls = msg?.tool_calls
@@ -145,81 +186,15 @@ export class OpenAICompletionProvider extends LLMProvider {
       }));
 
     const usage: TokenUsage = {
-      promptTokens: response.usage?.prompt_tokens ?? 0,
-      completionTokens: response.usage?.completion_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
+      promptTokens: resp.usage?.prompt_tokens ?? 0,
+      completionTokens: resp.usage?.completion_tokens ?? 0,
+      totalTokens: resp.usage?.total_tokens ?? 0,
     };
 
     return { message: this.buildAssistantMessage(msg?.content ?? null, toolCalls), usage };
   }
 
-  public async generate(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): Promise<{ message: Message; usage: TokenUsage }> {
-    const modelDef = this.resolveModel(model);
-    const sdkMessages = this.toSDKMessages(messages);
-    const params: Record<string, unknown> = {
-      model: modelDef.id,
-      messages: sdkMessages,
-    };
-    const sdkTools = this.toSDKTools(tools);
-    if (sdkTools) {
-      params.tools = sdkTools;
-    }
-    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
-    const response = await this.client.chat.completions.create(
-      merged as unknown as OpenAI.ChatCompletionCreateParamsNonStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-    return this.fromSDKResponse(response);
-  }
-
-  public async *generateStream(
-    model: ModelDefinition | string,
-    messages: Message[],
-    tools?: Tool[],
-    options?: GenerateOptions,
-  ): AsyncGenerator<StreamEvent, void> {
-    const modelDef = this.resolveModel(model);
-    const sdkMessages = this.toSDKMessages(messages);
-    const params: Record<string, unknown> = {
-      model: modelDef.id,
-      messages: sdkMessages,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-    const sdkTools = this.toSDKTools(tools);
-    if (sdkTools) {
-      params.tools = sdkTools;
-    }
-    const merged = modelDef.extraBody ? { ...modelDef.extraBody, ...params } : params;
-
-    const stream = await this.client.chat.completions.create(
-      merged as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-
-    const parser = new StreamParser();
-    let responseStarted = false;
-
-    for await (const chunk of stream) {
-      parser.setUsage(chunk.usage ?? undefined);
-      const delta = chunk.choices[0]?.delta;
-      if (!delta) {continue;}
-      if (!responseStarted && (Boolean(delta.content) || Boolean(delta.tool_calls?.length))) {
-        responseStarted = true;
-        yield { type: 'response_started' };
-      }
-      const event = parser.consume(delta);
-      if (event) {yield event;}
-    }
-
-    const toolCalls = parser.getToolCalls();
-    if (toolCalls) {yield { type: 'tool_calls', toolCalls };}
-    const usage = parser.getUsage();
-    if (usage) {yield { type: 'usage', usage };}
+  protected createStreamParser(): StreamParserLike {
+    return new StreamParser();
   }
 }
