@@ -91,6 +91,6 @@ export class AgentContext {
     if (role !== 'system') {
       return this._messages.length;
     }
-    return this._messages.findLastIndex((message) => message.role === 'system') + 1;
+    return 0;
   }
 }

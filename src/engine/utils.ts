@@ -1,5 +1,6 @@
 import { AesyiuProgrammingError, isProgrammingError } from '../error/index.js';
 import type { EngineErrorSource, EngineResult, RunStreamEvent } from '../types/index.js';
+import type { ToolMiddleware, ToolMiddlewareContext } from './types.js';
 
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) { return error.message; }
@@ -55,9 +56,16 @@ export async function consumeGenerator(gen: AsyncGenerator<unknown, EngineResult
   }
 }
 
-export async function consumeToolGenerator(gen: AsyncGenerator<never, unknown, void>): Promise<unknown> {
-  while (true) {
-    const next = await gen.next();
-    if (next.done) { return next.value; }
+export async function chainToolMiddleware(
+  middlewares: ReadonlyArray<ToolMiddleware>,
+  ctx: ToolMiddlewareContext,
+  core: () => Promise<unknown>,
+): Promise<unknown> {
+  async function run(index: number): Promise<unknown> {
+    if (index >= middlewares.length) {
+      return await core();
+    }
+    return await middlewares[index](ctx, () => run(index + 1));
   }
+  return await run(0);
 }

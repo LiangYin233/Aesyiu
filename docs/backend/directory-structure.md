@@ -21,10 +21,6 @@ src/
 │   └── index.ts          # AgentContext: message history, state, LLM switching
 ├── engine/
 │   ├── index.ts              # AesyiuEngine, public middleware types
-│   ├── execution-loop.ts     # Step-by-step agent execution loop
-│   ├── stream.ts             # Middleware-wrapped stream runner
-│   ├── stream-consumer.ts    # Shared LLM stream parsing (text_delta, tool_calls, usage)
-│   ├── event-queue.ts        # Async event queue for stream bridging
 │   ├── preparation.ts        # Run preparation (tool/skill resolution, compatibility mode)
 │   ├── types.ts              # Engine-specific types (Middleware, LLMMiddleware, etc.)
 │   └── utils.ts              # Engine utilities (chainMiddleware, combineAbortSignals, etc.)
@@ -83,7 +79,7 @@ Every module has an `index.ts` that acts as the public API boundary:
 |---------|------------|---------|
 | Files | `kebab-case.ts` | `execution-loop.ts`, `event-queue.ts` |
 | Barrel files | `index.ts` | Every module root |
-| Classes | `PascalCase` | `AesyiuEngine`, `ExecutionLoop` |
+| Classes | `PascalCase` | `AesyiuEngine`, `ToolRegistry` |
 | Types/Interfaces | `PascalCase` | `LLMMiddleware`, `AgentContextConfig` |
 | Functions | `camelCase` | `chainMiddleware`, `combineAbortSignals` |
 | Constants | `UPPER_SNAKE_CASE` or `camelCase` | `ANTHROPIC_MODELS`, `SKILL_PROMPT_SECTION` |
@@ -96,7 +92,7 @@ Every module has an `index.ts` that acts as the public API boundary:
 
 ### Well-organized module: `src/engine/`
 - `index.ts` is the public API (exports `AesyiuEngine`, middleware types)
-- Internal implementation lives in sibling files (`execution-loop.ts`, `stream.ts`, `utils.ts`)
+- Internal implementation lives in sibling files (`preparation.ts`, `utils.ts`)
 - Types co-located in `types.ts`
 
 ### Well-organized module: `src/provider/`

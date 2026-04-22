@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, type StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult, Tool as MCPTool } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool } from '../types/index.js';
+import { getErrorMessage } from '../engine/utils.js';
 
 const { version: packageVersion } = JSON.parse(
   readFileSync(join(__dirname, '../../package.json'), 'utf8'),
@@ -31,14 +32,6 @@ export interface MCPServerStatus {
 
 export function namespaceMCPToolName(serverName: string, toolName: string): string {
   return `${serverName}.${toolName}`;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
 }
 
 function ensureObjectArguments(args: unknown): Record<string, unknown> {

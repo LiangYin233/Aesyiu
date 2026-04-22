@@ -3,10 +3,9 @@ import { validateToolArguments } from './schema.js';
 import type { Message, Tool, ToolCall } from '../types/index.js';
 import type { ToolMiddleware } from '../engine/types.js';
 import {
-  chainMiddleware,
+  chainToolMiddleware,
   classifyError,
   combineAbortSignals,
-  consumeToolGenerator,
   getErrorMessage,
   rethrowProgrammingError,
 } from '../engine/utils.js';
@@ -78,14 +77,10 @@ async function runToolCall(
   };
 
   try {
-    const result = await consumeToolGenerator(
-      chainMiddleware(
-        toolMiddlewares,
-        middlewareContext,
-        async function* toolCore() {
-          return await tool.execute(middlewareContext.args, ctx, { signal });
-        },
-      ),
+    const result = await chainToolMiddleware(
+      toolMiddlewares,
+      middlewareContext,
+      async () => tool.execute(middlewareContext.args, ctx, { signal }),
     );
 
     return {

@@ -80,6 +80,7 @@ export function retryMiddleware(options?: RetryMiddlewareOptions): LLMMiddleware
 
   return async function* retryLLMMiddleware(ctx, next) {
     if (ctx.streamOutput) {
+      console.warn('[aesyiu:retry] Streaming mode does not support retries; retryMiddleware is skipped.');
       return yield* next();
     }
 

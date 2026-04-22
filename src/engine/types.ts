@@ -34,8 +34,8 @@ export interface ToolMiddlewareContext {
 
 export type ToolMiddleware = (
   ctx: ToolMiddlewareContext,
-  next: () => AsyncGenerator<never, unknown, void>,
-) => AsyncGenerator<never, unknown, void>;
+  next: () => Promise<unknown>,
+) => Promise<unknown>;
 
 export interface AesyiuEngineConfig {
   maxSteps?: number;

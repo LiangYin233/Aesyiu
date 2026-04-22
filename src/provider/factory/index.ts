@@ -33,7 +33,7 @@ const PROVIDERS: Record<LLMProviderType, ProviderRegistryEntry> = {
 };
 
 function cloneModelDefinition(model: ModelDefinition): ModelDefinition {
-  return structuredClone(model);
+  return { ...model };
 }
 
 export function createLLMProvider(input: CreateLLMProviderInput): LLMProvider {

@@ -47,10 +47,10 @@ Used for runtime errors (missing tools, provider failures, etc.).
 Every catch block that might intercept unknown errors must call `rethrowProgrammingError` first.
 
 ```typescript
-// src/engine/execution-loop.ts
+// src/engine/index.ts
 private handleStepError(ctx: AgentContext, error: unknown, signal: AbortSignal | undefined, fallbackSource: EngineErrorSource): EngineResult {
   rethrowProgrammingError(error);
-  return this.createErrorResult(ctx, error, this.getErrorSource(error, signal) ?? fallbackSource);
+  return this.createErrorResult(ctx, error, classifyError(error, signal) ?? fallbackSource);
 }
 ```
 
@@ -88,7 +88,7 @@ function toolFailureMessage(call: ToolCall, error: string): Message {
 ```
 
 ### Pattern 4: Engine Errors Are Returned as Results
-The `ExecutionLoop` returns `EngineResult` with `status: 'error'` instead of throwing.
+The `AesyiuEngine` returns `EngineResult` with `status: 'error'` instead of throwing.
 
 ```typescript
 // src/types/index.ts
@@ -113,13 +113,15 @@ Errors are classified by source for debugging:
 - `'timeout'` — Timeout
 - `'unknown'` — Unclassified
 
-Example from `src/engine/execution-loop.ts`:
+Example from `src/engine/utils.ts`:
 ```typescript
-private getErrorSource(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
-  if (signal?.aborted && signal.reason instanceof Error && signal.reason.name === 'TimeoutError') {return 'timeout';}
-  if (signal?.aborted && error === signal.reason) {return 'aborted';}
-  if (error instanceof Error && error.name === 'TimeoutError') {return 'timeout';}
-  if (signal?.aborted && error instanceof Error && error.name === 'AbortError') {return 'aborted';}
+export function classifyError(error: unknown, signal?: AbortSignal): EngineErrorSource | undefined {
+  if (signal?.aborted) {
+    if (signal.reason instanceof Error && signal.reason.name === 'TimeoutError') { return 'timeout'; }
+    if (error === signal.reason) { return 'aborted'; }
+    if (error instanceof Error && error.name === 'AbortError') { return 'aborted'; }
+  }
+  if (error instanceof Error && error.name === 'TimeoutError') { return 'timeout'; }
   return undefined;
 }
 ```
