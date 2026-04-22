@@ -7,12 +7,12 @@ import type {
   RunStreamEvent,
   TokenUsage,
   Tool,
-  ToolCall,
 } from '../types/index.js';
 import type { LLMMiddleware, LLMMiddlewareContext, ToolMiddleware } from './types.js';
 import { EventQueue } from './event-queue.js';
 import { prepareOutboundMessages } from './preparation.js';
 import { runToolCalls } from '../tool/runner.js';
+import { consumeLLMStream, consumeLLMStreamGen } from './stream-consumer.js';
 import { chainMiddleware, combineAbortSignals, getErrorMessage, rethrowProgrammingError, toError } from './utils.js';
 
 type LLMOperationResult = { message: Message; usage: TokenUsage };
@@ -145,38 +145,7 @@ export class ExecutionLoop {
           tools,
           options,
         );
-
-        let content = '';
-        let toolCalls: ToolCall[] | undefined;
-        let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-
-        for await (const event of stream) {
-          switch (event.type) {
-            case 'response_started':
-              break;
-            case 'text':
-              content += event.delta;
-              if (streamOutput) {
-                yield { type: 'text_delta', delta: event.delta, content: event.content };
-              }
-              break;
-            case 'tool_calls':
-              toolCalls = event.toolCalls;
-              break;
-            case 'usage':
-              usage = event.usage;
-              break;
-          }
-        }
-
-        return {
-          message: {
-            role: 'assistant',
-            content: content || null,
-            ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-          },
-          usage,
-        };
+        return yield* consumeLLMStreamGen(stream, streamOutput);
       } finally {
         internalAbort.abort();
       }
@@ -205,41 +174,12 @@ export class ExecutionLoop {
             middlewareContext.tools,
             middlewareContext.options,
           );
-
-          let content = '';
-          let toolCalls: ToolCall[] | undefined;
-          let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-
-          for await (const event of stream) {
-            switch (event.type) {
-              case 'response_started':
-                middlewareContext.responseStarted = true;
-                break;
-              case 'text':
-                middlewareContext.responseStarted = true;
-                content += event.delta;
-                if (middlewareContext.streamOutput) {
-                  queue.push({ type: 'text_delta', delta: event.delta, content: event.content });
-                }
-                break;
-              case 'tool_calls':
-                middlewareContext.responseStarted = true;
-                toolCalls = event.toolCalls;
-                break;
-              case 'usage':
-                usage = event.usage;
-                break;
-            }
-          }
-
-          return {
-            message: {
-              role: 'assistant',
-              content: content || null,
-              ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-            },
-            usage,
-          };
+          return consumeLLMStream(
+            stream,
+            middlewareContext.streamOutput,
+            (event) => { queue.push(event); },
+            () => { middlewareContext.responseStarted = true; },
+          );
         });
       } catch (error) {
         runnerError = error;
